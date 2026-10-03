@@ -161,6 +161,15 @@ wholesale and `llm-pi-ai` refuses `modelOverrides` on a route that also carries 
 - a route inheriting the installed catalog → a `modelOverrides` entry, a dict that merges and never
   narrows the served catalog.
 
+One side effect is worth knowing before you read the diff. The rewritten `models` array is built from
+the *resolved* section, so schema defaults the resolver had already materialized ride along into the
+stored document — after declaring a level on a hand-declared route, that model entry typically gains
+`compat.chatTemplateKwargs: {}` and `compat.chatTemplateArgs: {}` beside the `thinkingFormat` this
+plugin actually wrote. They are the schema's own defaults, so the resolved value is unchanged and
+nothing behaves differently; the document just becomes explicit about fields it previously left
+implicit. The write stays narrow at the route level: only the route you named appears in the user
+layer, and no route-level default is materialized.
+
 Writes are revision-fenced against the descriptor read in the same pass (a concurrent editor is
 reported, then retried once against a fresh read), and a declaration that is already in force writes
 nothing at all.

@@ -138,6 +138,8 @@ dsh --profile <profile> --dump-config    # 应能看到名为 dsh-thinking-effor
 - 带非空 `models` 列表的路由（所有自声明的第三方路由）→ **整体重写该列表**，每一项、每一个不属于本插件的字段都原样带过；
 - 沿用内置目录的路由 → 写 `modelOverrides` 条目；它是字典，合并，且不会收窄实际服务的目录。
 
+看 diff 之前有件事值得先知道。被重写的 `models` 数组是从**解析后**的配置构造的，因此解析器已经填好的 schema 默认值会一起落进存储文档——在自声明路由上声明档位后，那个模型条目通常会在本插件真正写入的 `thinkingFormat` 旁边多出 `compat.chatTemplateKwargs: {}` 和 `compat.chatTemplateArgs: {}`。它们就是 schema 自己的默认值，解析结果没有任何变化、行为也没有任何不同，只是文档对原本隐式的字段变得更显式。写入在路由层面仍然是窄的：用户层里只出现你指名的那条路由，也不会写入任何路由级默认值。
+
 写入用同一次读取拿到的 revision 做乐观并发围栏（检测到并发编辑会报出并重试一次），而已经生效的声明则完全不写。
 
 设置条目 id 取自适配器自己的可配置 provider 目录（`listConfigurableProviders().settingsNs`），所以即使 profile 重命名了 loader 条目也仍然可用；`llm-pi-ai` 只是兜底值。
