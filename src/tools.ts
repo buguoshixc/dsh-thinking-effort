@@ -12,6 +12,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { applyDeclaration, type ApplyOutcome } from './apply.ts'
+import { explainModel } from './commands.ts'
 import { PRESETS } from './presets.ts'
 import type { Declaration, PiAiPort } from './types.ts'
 
@@ -93,6 +94,26 @@ export function registerThinkingTools(
         const outcome = await applyDeclaration(portOf(), args.provider, args.model, declaration)
         return renderOutcome(`${args.provider}/${args.model}`, outcome)
       },
+    }))
+
+    tools.register(defineTool({
+      name: 'thinking_effort_explain',
+      description: 'Preview the request parameters each thinking level would actually send for a route, '
+        + 'without writing anything. Use it when a level appears to have no effect: an endpoint that does '
+        + 'not recognise a parameter usually ignores it rather than failing, so a wrong dialect fails silently.',
+      parameters: {
+        provider: { type: 'string', required: true, description: 'Provider route key, e.g. qiyuan' },
+        model: { type: 'string', required: true, description: 'Model id within that route' },
+        preset: {
+          type: 'string',
+          description: 'Preview this preset as if applied; omit to preview the declaration already in force.',
+        },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => [{ type: 'text', text: value }],
+      },
+      execute: async (args) => explainModel(portOf(), args.provider, args.model, args.preset),
     }))
   })
 }

@@ -84,7 +84,7 @@ test('apply registers the command and both tools', () => {
   plugin.apply(ctx, { diagnoseOnStart: false, defaultPreset: 'deepseek' })
   assert.deepEqual(registered.commands.map((entry) => entry.name), ['thinking'])
   assert.deepEqual(registered.tools.map((entry) => entry.name),
-    ['thinking_effort_status', 'thinking_effort_set'])
+    ['thinking_effort_status', 'thinking_effort_set', 'thinking_effort_explain'])
 })
 
 test('the status command names the route that cannot be adjusted', async () => {
@@ -95,7 +95,10 @@ test('the status command names the route that cannot be adjusted', async () => {
   assert.match(result.text, /qiyuan/)
   assert.match(result.text, /deepseek-v4\.1/)
   assert.match(result.text, /❌ 1 个模型无法调节思考强度/)
-  assert.match(result.text, /\/thinking set qiyuan\/deepseek-v4\.1 deepseek/)
+  // The suggestion must be the preset that cannot trip a strict relay, not a
+  // vendor-specific one.
+  assert.match(result.text, /\/thinking set qiyuan\/deepseek-v4\.1 openai-null-off/)
+  assert.match(result.text, /\/thinking explain qiyuan\/deepseek-v4\.1/)
 })
 
 test('the set command writes one route key through the merged settings seam', async () => {

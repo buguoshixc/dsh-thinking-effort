@@ -10,11 +10,12 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { applyDeclaration, piAiDescriptor, type ApplyOutcome } from './apply.ts'
+import { applyDeclaration, piAiDescriptor, profileOf, type ApplyOutcome } from './apply.ts'
 import { analyzeRoutes } from './diagnose.ts'
 import { renderPresets, renderRoutes } from './format.ts'
-import { findPreset, PRESETS } from './presets.ts'
+import { findPreset, normalizeLevels, PRESETS, type LevelWire } from './presets.ts'
 import { COMMAND_NAME, type Declaration, type PiAiPort } from './types.ts'
+import { collapses, detectsThinkingFormat, previewWire, renderEffect, resolveSupportsReasoningEffort } from './wire.ts'
 
 /** What a slash command returns to the framework. */
 export interface CommandResult {
@@ -37,6 +38,7 @@ type Parsed =
   | { action: 'presets' }
   | { action: 'help' }
   | { action: 'bad'; message: string }
+  | { action: 'explain'; provider: string; model: string; preset: string | undefined }
   | { action: 'set'; provider: string; model: string; declaration: Declaration }
 
 /** The usage block. */
@@ -44,13 +46,15 @@ const USAGE = [
   '用法：',
   `  /${COMMAND_NAME}                          查看每个模型的思考强度状态`,
   `  /${COMMAND_NAME} presets                  列出可用方言预设`,
+  `  /${COMMAND_NAME} explain <provider>/<model> [preset]`,
+  '                                        预览每一档实际会发送的请求参数（不写入）',
   `  /${COMMAND_NAME} set <provider>/<model> <preset> [--format <方言>] [--default <档位>]`,
   `  /${COMMAND_NAME} set <provider> <model> <preset>`,
   `  /${COMMAND_NAME} remove <provider>/<model>  撤销本插件写入的档位声明`,
   '',
   '例：',
-  `  /${COMMAND_NAME} set qiyuan/deepseek-v4.1 deepseek`,
-  `  /${COMMAND_NAME} set qiyuan/deepseek-v4.1 openai --default high`,
+  `  /${COMMAND_NAME} explain qiyuan/deepseek-v4.1`,
+  `  /${COMMAND_NAME} set qiyuan/deepseek-v4.1 deepseek-relay`,
 ].join('\n')
 
 /** Split a `provider/model` or `provider model` pair. */
@@ -79,6 +83,15 @@ export function parseCommand(rawInput: string): Parsed {
   if (head === undefined || head === 'status') return { action: 'status' }
   if (head === 'help' || head === '?') return { action: 'help' }
   if (head === 'presets') return { action: 'presets' }
+  if (head === 'explain') {
+    const target = splitTarget(parts.slice(1))
+    if (target === undefined || target.provider.length === 0 || target.model.length === 0) {
+      return { action: 'bad', message: 'explain 需要 <provider>/<model>。' }
+    }
+    const preset = target.rest[0]
+    if (target.rest.length > 1) return { action: 'bad', message: `explain 多余的参数 "${target.rest[1] ?? ''}"。` }
+    return { action: 'explain', provider: target.provider, model: target.model, preset }
+  }
   if (head !== 'set' && head !== 'remove') {
     return { action: 'bad', message: `未知的子命令 "${head}"。` }
   }
@@ -134,6 +147,90 @@ function renderOutcome(target: string, outcome: ApplyOutcome): CommandResult {
 }
 
 /**
+ * Preview what a declaration actually sends, level by level.
+ *
+ * Without a preset this reads the model's declaration as it stands; with one it
+ * previews that preset as if applied. Either way it writes nothing — the point
+ * is to make "which dialect does my relay want" an inspection rather than a
+ * guess, since an endpoint that does not know a parameter usually ignores it
+ * instead of failing.
+ *
+ * @param port - the settings port.
+ * @param provider - provider route key.
+ * @param modelId - model id within that route.
+ * @param presetId - a preset to preview, or `undefined` for the current declaration.
+ * @returns the rendered preview, or a message explaining why there is nothing to show.
+ */
+export function explainModel(
+  port: PiAiPort,
+  provider: string,
+  modelId: string,
+  presetId: string | undefined,
+): string {
+  const descriptor = piAiDescriptor(port)
+  if (descriptor === undefined) {
+    return `settings 条目 "${port.ns}" 未注册：没有可预览的第三方(pi-ai)适配器。`
+  }
+  const profile = profileOf(descriptor.value, provider)
+  if (profile === undefined) return `路由 "${provider}" 尚未配置。`
+  const entry = (Array.isArray(profile.models) ? profile.models : []).find((model) => model?.id === modelId)
+  if (entry === undefined) return `路由 "${provider}" 的 models 列表里没有 "${modelId}"。`
+
+  const header = `路由 ${provider} · ${modelId}`
+  const detected = detectsThinkingFormat(provider, typeof profile['baseURL'] === 'string' ? profile['baseURL'] : undefined)
+  const supports = resolveSupportsReasoningEffort(
+    entry.compat, profile.compat, provider,
+    typeof profile['baseURL'] === 'string' ? profile['baseURL'] : undefined,
+  )
+
+  let levels = entry.reasoningEfforts
+  let origin: string
+  if (presetId !== undefined) {
+    const preset = findPreset(presetId)
+    if (preset === undefined) {
+      return `未知的预设 "${presetId}"；可用：${PRESETS.map((entry) => entry.id).join('、')}。`
+    }
+    levels = preset.levels
+    origin = `预设 ${preset.id}（预览，未写入）`
+  } else if (levels === undefined || levels === false) {
+    return [
+      header,
+      '  该模型当前没有声明 reasoningEfforts，因此 pi-ai 收到的是 reasoning:false，选择器不会出现。',
+      `  用 /${COMMAND_NAME} set ${provider}/${modelId} <preset> 声明；先看 /${COMMAND_NAME} presets。`,
+    ].join('\n')
+  } else {
+    const compat = entry.compat
+    const pinned = typeof compat === 'object' && compat !== null
+      ? (compat as Record<string, unknown>)['thinkingFormat']
+      : undefined
+    origin = typeof pinned === 'string'
+      ? `当前声明（锁定方言 ${pinned}）`
+      : `当前声明（未锁方言，pi-ai 会按端点检测为 ${detected}）`
+  }
+
+  const pinnedFormat = presetId !== undefined
+    ? findPreset(presetId)?.thinkingFormat
+    : (typeof entry.compat === 'object' && entry.compat !== null
+      ? (entry.compat as Record<string, unknown>)['thinkingFormat'] as string | undefined
+      : undefined)
+  const effective = pinnedFormat ?? detected
+  const effects = previewWire(normalizeLevels(levels as Record<string, LevelWire>), effective, supports)
+  const collisions = collapses(effects)
+
+  return [
+    header,
+    `  ${origin}`,
+    `  实际生效的方言：${effective}${pinnedFormat === undefined ? `（由端点检测得出）` : '（声明锁定）'}`
+      + `${pinnedFormat !== undefined && pinnedFormat !== detected ? ` · 注意：检测结果本应是 ${detected}` : ''}`,
+    `  compat.supportsReasoningEffort：${supports}`,
+    '',
+    '  每档实际发送的参数：',
+    ...effects.map((effect) => `    ${renderEffect(effect)}`),
+    ...(collisions.length === 0 ? [] : ['', ...collisions.map((line) => `  ⚠ ${line}`)]),
+  ].join('\n')
+}
+
+/**
  * Register the `/thinking` command, skipping silently when the commands service
  * is not composed into this profile.
  *
@@ -157,6 +254,9 @@ export function registerThinkingCommand(
         if (parsed.action === 'bad') return { kind: 'error', text: `❌ ${parsed.message}\n\n${USAGE}` }
         if (parsed.action === 'presets') return { kind: 'success', text: renderPresets() }
         if (parsed.action === 'status') return { kind: 'success', text: `${report()}\n\n${USAGE}` }
+        if (parsed.action === 'explain') {
+          return { kind: 'success', text: explainModel(portOf(), parsed.provider, parsed.model, parsed.preset) }
+        }
         const target = `${parsed.provider}/${parsed.model}`
         const outcome = await applyDeclaration(portOf(), parsed.provider, parsed.model, parsed.declaration)
         return renderOutcome(target, outcome)

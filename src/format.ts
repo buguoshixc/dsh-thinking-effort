@@ -54,7 +54,13 @@ export function renderRoutes(routes: readonly RouteCapability[]): string {
     lines.push('✅ 所有模型都可调节思考强度。')
   } else {
     lines.push(`❌ ${broken.length} 个模型无法调节思考强度：${broken.join('、')}`)
-    lines.push(`   修复：/thinking set <provider>/<model> <preset>，例如 /thinking set ${broken[0] ?? 'qiyuan/model'} deepseek`)
+    const example = broken[0] ?? 'qiyuan/model'
+    // Deliberately the safest preset, not a DeepSeek-specific one: this plugin
+    // cannot tell which vendor dialect an endpoint speaks, and the generic
+    // preset sends only the parameter an OpenAI-compatible endpoint already
+    // understands. `/thinking explain` shows what any choice would actually send.
+    lines.push(`   修复：/thinking set ${example} openai-null-off`)
+    lines.push(`   不确定方言时，先看 /thinking explain ${example} 预览每档实际发送的请求参数。`)
   }
   return lines.join('\n')
 }

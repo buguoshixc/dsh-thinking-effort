@@ -59,6 +59,7 @@ export { PRESETS, THINKING_LEVELS, THINKING_FORMATS, validateLevels } from './pr
 export type { Declaration } from './types.ts'
 export { planDeclaration } from './plan.ts'
 export { analyzeRoutes, modelCapability, offeredLevels, unadjustable } from './diagnose.ts'
+export { previewWire, effectOf, thinkingLevelMapOf, detectsThinkingFormat } from './wire.ts'
 
 /** Plugin display name, matching the package name. */
 export const name = NAMESPACE
@@ -66,10 +67,15 @@ export const name = NAMESPACE
 /** No required services: every consumer is injected optionally. */
 export const inject: string[] = []
 
-/** Schemastery schema for this plugin's own composition config. */
+/**
+ * Schemastery schema for this plugin's own composition config.
+ *
+ * `defaultPreset` only pre-selects a value in the GUI; the default is the preset
+ * that sends nothing an OpenAI-compatible endpoint would not already understand.
+ */
 export const Config: Schema<PluginConfig> = Schema.object({
   diagnoseOnStart: Schema.boolean().default(true),
-  defaultPreset: Schema.string().default('deepseek'),
+  defaultPreset: Schema.string().default('openai-null-off'),
 })
 
 /** The slice of the adapter directory this plugin reads. */

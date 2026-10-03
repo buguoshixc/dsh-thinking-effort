@@ -106,26 +106,41 @@ dsh --profile <profile> --dump-config    # 应能看到名为 dsh-thinking-effor
 #   - deepseek-v4.1: ❌ 不可调 · 未声明 reasoningEfforts 且该路由不在内置目录里。
 # ❌ 1 个模型无法调节思考强度：qiyuan/deepseek-v4.1
 
-/thinking set qiyuan/deepseek-v4.1 deepseek
+/thinking explain qiyuan/deepseek-v4.1
+# 路由 qiyuan · deepseek-v4.1
+#   当前声明（未锁方言，pi-ai 会按端点检测为 openai）
+#   实际生效的方言：openai（由端点检测得出）
+#   compat.supportsReasoningEffort：true
+#   每档实际发送的参数：
+#     off      （不发送任何推理参数）
+#     low      {"reasoning_effort":"low"}
+#     ...
+
+/thinking set qiyuan/deepseek-v4.1 openai-null-off
 # ✅ 已写入 qiyuan/deepseek-v4.1 的思考强度声明。
 ```
 
-然后在输入框的模型选择器里展开 **推理等级** → Off / Low / High / Max。选中某一档同时会写进 Agent 默认设置，和内置 provider 的行为完全一致。
+然后在输入框的模型选择器里展开 **推理等级** → Off / Low / Medium / High。选中某一档同时会写进 Agent 默认设置，和内置 provider 的行为完全一致。
 
 ### 方言预设
 
-端点到底认哪些值取决于服务商；`reasoningEfforts` 映射的是**可选档位 → 实际发送的值**。
+端点到底认哪些值取决于服务商；`reasoningEfforts` 映射的是**可选档位 → 实际发送的值**。但档位只是一半：每个 `thinkingFormat` 是**独立分支**，会顶掉通用的 OpenAI 路径——所以锁错方言的后果是某一档看起来能用、实际什么都没发。因此预设按"最安全优先"排序，也只有真正需要方言的服务商才锁定它。
 
-| 预设 | 档位 | 发送 | 适用 |
-|---|---|---|---|
-| `deepseek` | off / low / high / max | `reasoning_effort` + `thinking` | DeepSeek 官方及兼容中转 |
-| `openai` | off / low / medium / high | `reasoning_effort`，off → `none` | OpenAI 及大多数 OpenAI 兼容中转 |
-| `openai-null-off` | off / low / medium / high | `reasoning_effort`，off 不发参数 | 拒绝 `none` 的中转 |
-| `openrouter` | off / low / medium / high | `reasoning_effort` | OpenRouter 及其镜像 |
-| `qwen` | off / low / high | `enable_thinking` / `thinking_budget` | 通义千问系 |
-| `passthrough` | 全部七档 | 档位名原样发送 | 认得 pi-ai 自己档位名的网关 |
-| `custom` | 你给 | 你给 | 其他情况——自行传入 `levels` |
-| `inherit` | 不变 | 不变 | 只固定 `--format` / `--default` |
+| 预设 | 档位 | 发送 | 锁定方言 | 适用 |
+|---|---|---|---|---|
+| `openai-null-off` | off / low / medium / high | `reasoning_effort`；off 不发参数 | 否 | 任何 OpenAI 兼容端点——先试这个 |
+| `openai` | off / low / medium / high | `reasoning_effort`；off → `"none"` | 否 | OpenAI 官方，或明确接受 `none` 的中转 |
+| `deepseek-relay` | off / low / high / max | `reasoning_effort` | 否 | 服务 DeepSeek 模型的第三方中转站 |
+| `deepseek` | off / low / high / max | `reasoning_effort` **+ `thinking:{type:…}`** | `deepseek` | DeepSeek 官方端点或严格克隆 |
+| `openrouter` | off / low / medium / high | 嵌套 `reasoning:{effort}` | `openrouter` | OpenRouter 及其镜像 |
+| `qwen` | off / low / high | `enable_thinking`（+ `reasoning_effort`） | `qwen` | 通义千问系 |
+| `passthrough` | 全部七档 | 档位名原样发送 | 否 | 认得 pi-ai 自己档位名的网关 |
+| `custom` | 你给 | 你给 | — | 其他情况——自行传入 `levels` |
+| `inherit` | 不变 | 不变 | — | 只固定 `--format` / `--default` |
+
+**`deepseek-relay` 为什么存在。** `deepseek` 会锁定 DeepSeek 私有的 `thinking:{type:…}` 参数，而 OpenAI 兼容中转站通常直接忽略它。忽略比报错更糟：需要关闭思考时，那个分支同时**也不发** `reasoning_effort`，于是 **off 完全不起作用**，而有名字的档位看起来一切正常。如果你的中转站上 off 没反应，原因就在这里——换成 `deepseek-relay` 或 `openai-null-off`，它们只发标准参数。
+
+`/thinking explain <provider>/<model> [preset]` 会逐档列出实际会发送的请求参数，同时告诉你"如果不锁方言 pi-ai 本来会检测成什么"，并在两档发送内容完全相同时给出警告。它不写入任何东西。
 
 `off:` **留空**表示「支持该档位，但派发时不发送任何参数」——当「不思考」就等于「参数缺席」时，这才是正确写法。只有 `off` 允许留空。
 
@@ -170,6 +185,7 @@ src/
   presets.ts      思考档位、线协议方言、校验器（纯函数）
   plan.ts         声明 → 设置补丁（纯函数，浏览器半边共用）
   diagnose.ts     能力报告（纯函数）
+  wire.ts         每一档实际会往请求里发什么（纯函数）
   apply.ts        settings 端口：读描述符、规划、合并写入
   commands.ts     /thinking
   tools.ts        thinking_effort_status / thinking_effort_set

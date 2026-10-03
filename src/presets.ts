@@ -67,52 +67,69 @@ export interface DialectPreset {
 }
 
 /**
- * The offered dialects, most-reached first.
+ * The offered dialects, safest first.
  *
  * These are starting points, not laws: a relay that renames an effort is served
  * by `custom`, and every preset can be overridden field by field in a
- * declaration. `passthrough` exists for endpoints that accept pi-ai's own level
- * names unchanged and need no dialect hint.
+ * declaration.
+ *
+ * The order is deliberate. Pinning a `thinkingFormat` *replaces* the dialect
+ * pi-ai would have detected from the endpoint, and each dialect is a separate
+ * branch that suppresses the generic OpenAI path — so a wrong pin can make a
+ * level do nothing while appearing to work. The presets that send only the
+ * standard `reasoning_effort` come first, and the ones that add a vendor-private
+ * parameter say so. `deepseek-relay` exists precisely for the common case this
+ * distinction bites: a third-party gateway serving DeepSeek models, which wants
+ * DeepSeek's level *names* but not DeepSeek's private wire parameter.
+ *
+ * Run `/thinking explain <provider>/<model>` to see the resulting request
+ * parameters for a route instead of trusting a summary.
  */
 export const PRESETS: readonly DialectPreset[] = [
   {
+    id: 'openai-null-off',
+    label: 'OpenAI 兼容（只发 reasoning_effort）',
+    summary: '发送 reasoning_effort；off 什么都不发。对任何 OpenAI 兼容端点都安全——不确定时先试这个。',
+    levels: { off: null, low: 'low', medium: 'medium', high: 'high' },
+  },
+  {
+    id: 'openai',
+    label: 'OpenAI（off 显式发 none）',
+    summary: '发送 reasoning_effort；off 显式发送 "none"。端点是 OpenAI 官方、或明确接受 none 时用。',
+    levels: { off: 'none', low: 'low', medium: 'medium', high: 'high' },
+  },
+  {
+    id: 'deepseek-relay',
+    label: 'DeepSeek 档位名 + 通用参数（中转站推荐）',
+    summary: '档位沿用 DeepSeek 的命名（low/high/max），但只发 reasoning_effort，不锁方言。'
+      + '服务 DeepSeek 模型的中转站通常属于这一类。',
+    levels: { off: null, low: 'low', high: 'high', max: 'max' },
+  },
+  {
     id: 'deepseek',
-    label: 'DeepSeek（low / high / max）',
-    summary: 'DeepSeek 官方接口及兼容中转：off 不发参数，low/high/max 走 reasoning_effort + thinking。',
+    label: 'DeepSeek 官方（含 thinking 参数）',
+    summary: '除 reasoning_effort 外还会发送 DeepSeek 私有的 thinking:{type:enabled|disabled}。'
+      + '仅当端点确实是 DeepSeek 官方或严格兼容时使用；通用中转多半不认这个参数，会让 off 看起来失效。',
     levels: { off: null, low: 'low', high: 'high', max: 'max' },
     thinkingFormat: 'deepseek',
   },
   {
-    id: 'openai',
-    label: 'OpenAI（none / low / medium / high）',
-    summary: 'OpenAI 及大多数 OpenAI 兼容中转：off 显式发送 none，low/medium/high 走 reasoning_effort。',
-    levels: { off: 'none', low: 'low', medium: 'medium', high: 'high' },
-    thinkingFormat: 'openai',
-  },
-  {
-    id: 'openai-null-off',
-    label: 'OpenAI 兼容（off 不发参数）',
-    summary: '与 openai 相同，但 off 不发送 reasoning_effort —— 适用于拒绝 "none" 的中转。',
-    levels: { off: null, low: 'low', medium: 'medium', high: 'high' },
-    thinkingFormat: 'openai',
-  },
-  {
     id: 'openrouter',
-    label: 'OpenRouter（low / medium / high）',
-    summary: 'OpenRouter 及其镜像：off 不发参数，low/medium/high 走 reasoning_effort。',
-    levels: { off: null, low: 'low', medium: 'medium', high: 'high' },
+    label: 'OpenRouter（嵌套 reasoning.effort）',
+    summary: '发送嵌套的 reasoning:{effort}；off 发送 reasoning:{effort:"none"}。OpenRouter 及其镜像专用。',
+    levels: { off: 'none', low: 'low', medium: 'medium', high: 'high' },
     thinkingFormat: 'openrouter',
   },
   {
     id: 'qwen',
     label: 'Qwen（enable_thinking）',
-    summary: '通义千问系：off 不发参数，low/high 经 enable_thinking / thinking_budget 派发。',
+    summary: '发送 enable_thinking 布尔值，选中档位时附带 reasoning_effort。通义千问系专用。',
     levels: { off: null, low: 'low', high: 'high' },
     thinkingFormat: 'qwen',
   },
   {
     id: 'passthrough',
-    label: '透传全部七档',
+    label: '透传全部七档（不锁方言）',
     summary: '七档全部按同名值发送，不锁定 thinking 方言 —— 适用于自己认得这些档位的网关。',
     levels: {
       off: null,

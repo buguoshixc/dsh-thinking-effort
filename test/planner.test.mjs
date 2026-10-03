@@ -120,10 +120,13 @@ test('keeps unowned compat switches when removing', () => {
 })
 
 test('edits a catalog route through modelOverrides instead of a models list', () => {
+  // `openrouter` is used because it is one of the presets that PINS a dialect:
+  // the point here is both halves of a catalog-route write - the dict override
+  // and the compat block that goes with it.
   const plan = planDeclaration({
     provider: 'anthropic',
     modelId: 'claude-sonnet-4-5',
-    declaration: { preset: 'openai' },
+    declaration: { preset: 'openrouter' },
     profile: { apiKeyEnv: 'ANTHROPIC_API_KEY', models: [] },
   })
   assert.equal(plan.ok, true, plan.problems.join('; '))
@@ -131,9 +134,26 @@ test('edits a catalog route through modelOverrides instead of a models list', ()
   assert.deepEqual(plan.patch.modelOverrides, {
     'claude-sonnet-4-5': {
       reasoningEfforts: { off: 'none', low: 'low', medium: 'medium', high: 'high' },
-      compat: { thinkingFormat: 'openai' },
+      compat: { thinkingFormat: 'openrouter' },
     },
   })
+})
+
+test('the generic presets pin no dialect, so pi-ai keeps detecting the endpoint', () => {
+  // Pinning replaces detection, and a wrong pin is exactly how a level ends up
+  // silently doing nothing. The presets that only mean "OpenAI-style
+  // reasoning_effort" must therefore leave compat alone.
+  for (const id of ['openai', 'openai-null-off', 'deepseek-relay', 'passthrough']) {
+    const plan = planDeclaration({
+      provider: 'qiyuan',
+      modelId: 'm',
+      declaration: { preset: id },
+      profile: { api: 'openai-completions', models: [{ id: 'm' }] },
+    })
+    assert.equal(plan.ok, true, `${id}: ${plan.problems.join('; ')}`)
+    assert.equal(plan.patch.models[0].compat, undefined, `${id} must not pin a dialect`)
+    assert.ok(plan.patch.models[0].reasoningEfforts, `${id} must still declare levels`)
+  }
 })
 
 test('carries route-level fields the declaration names', () => {

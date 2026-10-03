@@ -121,31 +121,55 @@ Fix your relay once:
 #   - deepseek-v4.1: ❌ 不可调 · 未声明 reasoningEfforts 且该路由不在内置目录里。
 # ❌ 1 个模型无法调节思考强度：qiyuan/deepseek-v4.1
 
-/thinking set qiyuan/deepseek-v4.1 deepseek
+/thinking explain qiyuan/deepseek-v4.1
+# 路由 qiyuan · deepseek-v4.1
+#   当前声明（未锁方言，pi-ai 会按端点检测为 openai）
+#   实际生效的方言：openai（由端点检测得出）
+#   compat.supportsReasoningEffort：true
+#   每档实际发送的参数：
+#     off      （不发送任何推理参数）
+#     low      {"reasoning_effort":"low"}
+#     ...
+
+/thinking set qiyuan/deepseek-v4.1 openai-null-off
 # ✅ 已写入 qiyuan/deepseek-v4.1 的思考强度声明。
 ```
 
-Then open the model picker in the composer → **推理等级** → Off / Low / High / Max. Picking one also
+Then open the model picker in the composer → **推理等级** → Off / Low / Medium / High. Picking one also
 saves it as the Agent default, exactly like a built-in provider.
 
 ### Dialect presets
 
 Which wire values the endpoint accepts is provider-specific; `reasoningEfforts` maps *selectable
-level* → *value sent*.
+level* → *value sent*. But the levels are only half of it: each `thinkingFormat` is a **separate
+branch** that suppresses the generic OpenAI path, so pinning the wrong dialect can make a level do
+nothing while appearing to work. That is why the presets are ordered safest first, and why only the
+vendors that need one pin a dialect at all.
 
-| Preset | Levels | Sends | Fits |
-|---|---|---|---|
-| `deepseek` | off / low / high / max | `reasoning_effort` + `thinking` | DeepSeek official and compatible relays |
-| `openai` | off / low / medium / high | `reasoning_effort`, `off` → `none` | OpenAI and most OpenAI-compatible relays |
-| `openai-null-off` | off / low / medium / high | `reasoning_effort`, `off` sends nothing | Relays that reject `none` |
-| `openrouter` | off / low / medium / high | `reasoning_effort` | OpenRouter and mirrors |
-| `qwen` | off / low / high | `enable_thinking` / `thinking_budget` | Qwen family |
-| `passthrough` | all seven | level name verbatim | Gateways that know pi-ai's own names |
-| `custom` | yours | yours | Anything else — pass `levels` yourself |
-| `inherit` | unchanged | unchanged | Only pin `--format` / `--default` |
+| Preset | Levels | Sends | Pins | Fits |
+|---|---|---|---|---|
+| `openai-null-off` | off / low / medium / high | `reasoning_effort`; `off` sends nothing | no | Any OpenAI-compatible endpoint — try this first |
+| `openai` | off / low / medium / high | `reasoning_effort`; `off` → `"none"` | no | OpenAI itself, or a relay that accepts `none` |
+| `deepseek-relay` | off / low / high / max | `reasoning_effort` | no | A third-party gateway serving DeepSeek models |
+| `deepseek` | off / low / high / max | `reasoning_effort` **+ `thinking:{type:…}`** | `deepseek` | DeepSeek's own endpoint, or a strict clone |
+| `openrouter` | off / low / medium / high | nested `reasoning:{effort}` | `openrouter` | OpenRouter and mirrors |
+| `qwen` | off / low / high | `enable_thinking` (+ `reasoning_effort`) | `qwen` | Qwen family |
+| `passthrough` | all seven | level name verbatim | no | Gateways that know pi-ai's own names |
+| `custom` | yours | yours | — | Anything else — pass `levels` yourself |
+| `inherit` | unchanged | unchanged | — | Only pin `--format` / `--default` |
 
 `off:` with **no value** means "supported, but dispatch sends nothing" — the right spelling when not
 thinking *is* the absence of the parameter. Only `off` may be left empty.
+
+**Why `deepseek-relay` exists.** `deepseek` pins DeepSeek's private `thinking:{type:…}` parameter,
+which an OpenAI-compatible relay generally ignores. Ignoring is worse than failing: with thinking
+switched off, that branch sends *no* `reasoning_effort` either, so **Off does nothing** while a named
+level looks fine. If Off seems to have no effect on a relay, this is the cause — switch to
+`deepseek-relay` or `openai-null-off`, both of which send only the standard parameter.
+
+`/thinking explain <provider>/<model> [preset]` prints, for every level, the exact request
+parameters it will send — plus what pi-ai *would* have detected had nothing been pinned, and a
+warning when two levels collapse to the same request. Nothing is written.
 
 Overrides: `/thinking set qiyuan/m deepseek --format deepseek --default high`.
 
@@ -212,6 +236,7 @@ src/
   presets.ts      thinking levels, wire dialects, the validator (pure)
   plan.ts         declaration → settings patch (pure, shared with the browser)
   diagnose.ts     capability report (pure)
+  wire.ts         what each level actually puts on the wire (pure)
   apply.ts        the settings port: read descriptor, plan, merge the write
   commands.ts     /thinking
   tools.ts        thinking_effort_status / thinking_effort_set
