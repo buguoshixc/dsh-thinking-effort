@@ -1,0 +1,8 @@
+# Matches the layout a dsh profile uses for plugin installs (`nodeLinker: hoisted`),
+# and keeps tsdown's transitive dependencies resolvable when the `prepare` script
+# builds this package during `dsh plugin add`.
+packages:
+  - .
+
+nodeLinker: hoisted
+autoInstallPeers: false
