@@ -1,0 +1,6 @@
+# Keep one line ending in the repository regardless of the contributor's
+# platform: the build, the YAML patch layer and the JSON manifests are all
+# LF-sensitive enough that a CRLF checkout is noise in every diff.
+* text=auto eol=lf
+*.png binary
+*.ico binary
