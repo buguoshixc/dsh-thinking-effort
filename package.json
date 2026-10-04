@@ -53,6 +53,18 @@
     "third-party-api"
   ],
   "license": "MIT",
+  "author": {
+    "name": "buguoshixc",
+    "url": "https://github.com/buguoshixc"
+  },
+  "homepage": "https://github.com/buguoshixc/dsh-thinking-effort#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/buguoshixc/dsh-thinking-effort.git"
+  },
+  "bugs": {
+    "url": "https://github.com/buguoshixc/dsh-thinking-effort/issues"
+  },
   "engines": {
     "node": "^22.19.0 || >=24"
   },

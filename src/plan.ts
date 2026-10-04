@@ -130,10 +130,16 @@ function sameLevels(current: unknown, desired: LevelMap): boolean {
 /**
  * Merge the owned model fields onto one entry.
  *
+ * `compat.thinkingFormat` is owned outright, in both directions: a declaration
+ * that names a dialect pins it, and one that names none *clears* it, because
+ * "no dialect" means "let pi-ai detect the endpoint". Leaving a previous pin in
+ * place would make switching from a pinning preset to a non-pinning one a silent
+ * no-op — the one failure this module exists to prevent.
+ *
  * @param entry - the model entry being edited.
  * @param declaration - the requested edit.
  * @param desiredModel - the owned fields to write, empty for a removal.
- * @param desiredCompat - the dialect to pin, or `undefined` to leave compat alone.
+ * @param desiredCompat - the dialect to pin, or `undefined` to clear any pin.
  * @returns the next entry, carrying every unowned field through untouched.
  */
 function nextModelEntry(
@@ -154,6 +160,12 @@ function nextModelEntry(
       ...(isPlainObject(raw['compat']) ? raw['compat'] : {}),
       thinkingFormat: desiredCompat,
     }
+  } else {
+    // No dialect named by the declaration, so any pin this plugin (or a hand
+    // edit) left behind must go: "no dialect" means "let pi-ai detect".
+    const compat = stripOwned(raw['compat'], OWNED_COMPAT_FIELDS)
+    if (compat === undefined) delete next['compat']
+    else next['compat'] = compat
   }
   return next
 }

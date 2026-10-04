@@ -119,6 +119,55 @@ test('keeps unowned compat switches when removing', () => {
   assert.deepEqual(model.compat, { supportsDeveloperRole: false })
 })
 
+test('a preset that pins no dialect CLEARS a pin left by an earlier one', () => {
+  // Switching deepseek -> deepseek-relay is the fix for a relay that ignores
+  // DeepSeek's private thinking parameter. If the old pin survived, the switch
+  // would report success and change nothing on the wire.
+  const plan = planDeclaration({
+    provider: 'qiyuan',
+    modelId: 'deepseek-v4.1',
+    declaration: { preset: 'deepseek-relay' },
+    profile: declaredRoute({
+      models: [{
+        id: 'deepseek-v4.1',
+        reasoningEfforts: { off: null, low: 'low', high: 'high', max: 'max' },
+        compat: { thinkingFormat: 'deepseek', chatTemplateKwargs: {} },
+      }],
+    }),
+  })
+  assert.equal(plan.ok, true, plan.problems.join('; '))
+  assert.equal(plan.unchanged, false, 'the pin must make this a real change')
+  const [model] = plan.patch.models
+  // Only the owned switch goes; the rest of compat stays.
+  assert.deepEqual(model.compat, { chatTemplateKwargs: {} })
+})
+
+test('clearing the last compat switch drops the container', () => {
+  const plan = planDeclaration({
+    provider: 'qiyuan',
+    modelId: 'm',
+    declaration: { preset: 'openai-null-off' },
+    profile: declaredRoute({
+      models: [{ id: 'm', reasoningEfforts: { off: null, high: 'high' }, compat: { thinkingFormat: 'deepseek' } }],
+    }),
+  })
+  const [model] = plan.patch.models
+  assert.equal(model.compat, undefined)
+})
+
+test('an already-correct non-pinning declaration is still a no-op', () => {
+  const plan = planDeclaration({
+    provider: 'qiyuan',
+    modelId: 'm',
+    declaration: { preset: 'deepseek-relay' },
+    profile: declaredRoute({
+      models: [{ id: 'm', reasoningEfforts: { off: null, low: 'low', high: 'high', max: 'max' } }],
+    }),
+  })
+  assert.equal(plan.unchanged, true)
+  assert.deepEqual(plan.patch, {})
+})
+
 test('edits a catalog route through modelOverrides instead of a models list', () => {
   // `openrouter` is used because it is one of the presets that PINS a dialect:
   // the point here is both halves of a catalog-route write - the dict override
