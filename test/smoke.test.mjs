@@ -7,7 +7,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import { register } from 'node:module'
 import { fileURLToPath } from 'node:url'
+
+// Install the stub resolver HERE rather than relying on the runner forwarding
+// its own `--import` into the per-file child process. Node's test runner does
+// not guarantee that, and this file is the only one that imports the built
+// bundle, so it is the only one that needs it.
+register(new URL('./resolve-hook.mjs', import.meta.url))
 
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
 const plugin = await import('../lib/index.js')

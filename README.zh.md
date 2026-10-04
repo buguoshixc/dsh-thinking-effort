@@ -175,7 +175,7 @@ pnpm test          # node --test：纯逻辑模块 + 构建产物
 pnpm verify        # 以上三步
 ```
 
-`pnpm test` 不需要安装 dsh：`test/register.mjs` 会挂一个解析钩子，把 `@deepseek-ai/dsh-tools` 重定向到本地同名桩（`defineTool` 运行时就是恒等函数；它真实的类型签名仍由 devDependency 参与类型检查）。
+`pnpm test` 不需要安装 dsh。`test/smoke.test.mjs` 会自己挂上解析钩子（`test/resolve-hook.mjs`），把 `@deepseek-ai/dsh-tools` 重定向到本地同名桩——真实的那个包会牵出一串 harness 内部依赖，插件仓库没有理由去装它们；`defineTool` 运行时就是恒等函数，而它真实的类型签名仍由 devDependency 参与类型检查。钩子在测试文件内部注册，因此无论测试运行器是否把自身的标志转发给每个文件的子进程，`pnpm test` 的行为都一致。
 
 目录结构：
 

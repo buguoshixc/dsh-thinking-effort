@@ -224,9 +224,12 @@ pnpm test          # node --test over the pure modules and the build output
 pnpm verify        # all three
 ```
 
-`pnpm test` runs without a dsh installation: `test/register.mjs` installs a resolver hook that
-redirects `@deepseek-ai/dsh-tools` to a faithful local stub (`defineTool` is an identity helper at
-runtime; its real signature still type-checks from the devDependency).
+`pnpm test` runs without a dsh installation. `test/smoke.test.mjs` registers a resolver hook
+(`test/resolve-hook.mjs`) that redirects `@deepseek-ai/dsh-tools` to a faithful local stub: the real
+package resolves a chain of harness-internal peers a plugin repo has no business installing, and
+`defineTool` is an identity helper at runtime — its real signature still type-checks from the
+devDependency. The hook is registered inside the test file itself, so `pnpm test` behaves the same
+whether or not the runner forwards its own flags to per-file child processes.
 
 Layout:
 
