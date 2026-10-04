@@ -1,28 +1,22 @@
 # dsh-thinking-effort bundle layer: mounts the plugin into a dsh profile's host
-# composition. The `dsh plugin add` command pnpm-installs the package into the
-# profile and reconciles it into the profile's `dsh.profile.bundles` list, after
-# which this patch inserts the plugin row below.
+# composition. `dsh plugin --profile <name> add <package>` pnpm-installs the
+# package into the profile and reconciles it into the profile's
+# `dsh.profile.bundles` list, after which this patch inserts the plugin row
+# below.
 #
-# `declarations` maps "<provider>/<model>" to the thinking-intensity dialect
-# declared for that route. It is normally filled in from the GUI (Settings →
-# Plugins → Configurable) or with the /thinking command; the composition layer
-# here is only the base, and the user layer overrides it field by field.
+# The plugin keeps NO declaration state of its own: the `llm-pi-ai` section is
+# the single source of truth for what a model offers, and a declaration is a
+# one-shot edit of it made with `/thinking set` or the settings tab. So there is
+# nothing here to keep in sync — only the two preferences below.
 - insert:
     - id: thinking-effort
       # Node-resolvable package name — must stay in sync with package.json `name`.
       name: 'dsh-thinking-effort'
       config:
-        # Re-apply every declaration whenever the llm-pi-ai section resolves to
-        # something new (a manual edit of the provider profile, a catalog
-        # upgrade, another surface writing the namespace).
-        autoApply: true
-        # Log one report at load naming the routes whose thinking intensity is
-        # not adjustable, so a new third-party key is noticed immediately.
+        # Log one capability report at load, naming every route whose thinking
+        # intensity still cannot be adjusted, so a newly added third-party key is
+        # noticed immediately rather than the first time the model picker opens.
         diagnoseOnStart: true
-        # Example (delete the braces and uncomment to ship a declaration from
-        # the composition layer instead of the GUI):
-        #
-        # declarations:
-        #   qiyuan/deepseek-v4.1:
-        #     preset: deepseek
-        declarations: {}
+        # Preset pre-selected in the settings tab. Deliberately the one that sends
+        # only the parameter an OpenAI-compatible endpoint already understands.
+        defaultPreset: openai-null-off
