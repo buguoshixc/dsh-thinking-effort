@@ -51,7 +51,9 @@ it serves. It is a missing *declaration*.
 ## What this plugin does
 
 It writes that declaration — in the one place the adapter reads it, through the supported settings
-seam. No adapter takeover, no HTTP interception, no harness patch.
+seam. No adapter takeover, no HTTP interception, no harness patch. By default it does so
+**automatically at startup**: any third-party route with no declaration is filled in, so installing
+the plugin is the whole setup.
 
 ```yaml
 # what it writes, for the route above
@@ -69,11 +71,12 @@ providers:
           thinkingFormat: deepseek
 ```
 
-Three entry points over one shared, unit-tested planner:
+Four entry points over one shared, unit-tested planner:
 
 | Surface | How |
 |---|---|
-| Slash command | `/thinking` · `/thinking presets` · `/thinking set <provider>/<model> <preset>` · `/thinking remove …` |
+| Automatic | **Nothing to run**: a load-time pass declares every third-party route that has none |
+| Slash command | `/thinking` · `/thinking presets` · `/thinking adapt` · `/thinking set <provider>/<model> <preset>` · `/thinking remove …` |
 | Settings tab | Settings → Plugins → **思考强度** — per-model dropdown, applies instantly |
 | Model tool | `thinking_effort_status` / `thinking_effort_set`, so "这个模型调不了思考强度" gets fixed conversationally |
 
@@ -113,13 +116,52 @@ dsh --profile <profile> --dump-config    # expect a row named dsh-thinking-effor
 
 ## Usage
 
-Fix your relay once:
+Nothing to do. A freshly added third-party key is declared automatically at startup, and the log says
+which route got which level map:
+
+```
+# dsh-thinking-effort: 自动适配完成。
+# ✅ 已自动声明 1 个模型的思考强度档位：
+#   路由 qiyuan → passthrough（1 个模型）
+#     端点检测为 openai，写入 passthrough
+#     档位：off→(不发) minimal→minimal low→low medium→medium high→high xhigh→xhigh max→max
+#   这是可以随时改的起点：换档位名或方言用 /thinking set，预览用 /thinking explain。
+```
+
+Then open the model picker in the composer → **推理等级** → Off / Minimal / Low / Medium / High /
+XHigh / Max. Picking one also saves it as the Agent default, exactly like a built-in provider.
+
+### What automatic adaptation decides
+
+It only touches **configuration-declared** routes — a catalog route already resolves its models'
+capability from the installed catalog, so a declaration there would only narrow it. For each route it
+reads the evidence already in the configuration:
+
+1. If pi-ai already believes the endpoint does **not** take `reasoning_effort` (xAI, Z.AI, Moonshot,
+   Together, NVIDIA, Cloudflare, or your own `compat.supportsReasoningEffort: false`), it writes
+   `openai-null-off`. Sending `xhigh` to an endpoint that does not parse the parameter is the one way
+   this plugin could turn a missing picker into a failing request. Your explicit setting outranks the
+   plugin's inference.
+2. Otherwise, if the endpoint host identifies a vendor (`deepseek.com`, `openrouter.ai`, DashScope,
+   …), it writes that vendor's preset.
+3. Otherwise it writes `autoAdaptPreset`, `passthrough` by default: all seven levels sent under their
+   own names, no dialect pinned. A gateway with its own ladder gets the whole ladder back that way.
+
+It never overwrites a model you already declared, and never touches `reasoningEfforts: false` — that
+is an explicit "this model does not reason", and adaptation must not undo it.
+
+Adaptation supplies the *declaration*; it cannot verify that the endpoint honours these values,
+because that is not discoverable from configuration. After seeing the log line, check what each level
+actually sends with `/thinking explain`, then try a level in a session.
+
+### Adjusting it by hand
+
+What it wrote is a starting point you can change at any time:
 
 ```
 /thinking
 # 路由 qiyuan（自声明路由）
-#   - deepseek-v4.1: ❌ 不可调 · 未声明 reasoningEfforts 且该路由不在内置目录里。
-# ❌ 1 个模型无法调节思考强度：qiyuan/deepseek-v4.1
+#   - deepseek-v4.1: 可调 · 档位 off / minimal / low / medium / high / xhigh / max
 
 /thinking explain qiyuan/deepseek-v4.1
 # 路由 qiyuan · deepseek-v4.1
@@ -131,12 +173,22 @@ Fix your relay once:
 #     low      {"reasoning_effort":"low"}
 #     ...
 
-/thinking set qiyuan/deepseek-v4.1 openai-null-off
+/thinking set qiyuan/deepseek-v4.1 deepseek-relay
 # ✅ 已写入 qiyuan/deepseek-v4.1 的思考强度声明。
 ```
 
-Then open the model picker in the composer → **推理等级** → Off / Low / Medium / High. Picking one also
-saves it as the Agent default, exactly like a built-in provider.
+`/thinking adapt` runs the pass again on demand: `/thinking adapt qiyuan --preset deepseek-relay`
+restricts it to one route and names the level map.
+
+To turn adaptation off (this plugin's own profile config):
+
+```yaml
+- id: dsh-thinking-effort
+  name: 'dsh-thinking-effort'
+  config:
+    autoAdapt: false          # only write when /thinking adapt is run
+    autoAdaptPreset: passthrough
+```
 
 ### Dialect presets
 
@@ -196,7 +248,15 @@ layer, and no route-level default is materialized.
 
 Writes are revision-fenced against the descriptor read in the same pass (a concurrent editor is
 reported, then retried once against a fresh read), and a declaration that is already in force writes
-nothing at all.
+nothing at all. That is what makes automatic adaptation idempotent: the first boot writes, every
+later boot is a zero-write no-op, and it needs no memory of what it wrote — an in-force declaration
+is itself what leaves it with nothing to do.
+
+Adaptation and the diagnostic run at the same injection point, adaptation first, so a log line
+saying "every model is adjustable" describes the state the pass just produced rather than one about
+to arrive. The settings service can register before the pi-ai adapter does, so a pass that finds no
+descriptor retries up to five times at half-second intervals before giving up and pointing at
+`/thinking adapt`.
 
 The settings entry id is taken from the adapter's own configurable-provider directory
 (`listConfigurableProviders().settingsNs`), so a profile that renames the loader entry still works;
@@ -210,9 +270,11 @@ The settings entry id is taken from the adapter's own configurable-provider dire
   else's config.
 - **No HTTP-layer rewriting.** There is no supported interceptor for the request body, and mutating
   the frozen call config throws. Declaring the capability is the supported path.
-- **No automatic guessing of a dialect.** Which values an endpoint accepts is not discoverable from
-  configuration; a wrong guess would look like a working control that silently sends nothing useful.
-  Pick a preset.
+- **No probing of the endpoint.** Automatic adaptation judges only the evidence already in the
+  configuration: it neither spends your API key on test requests nor infers a dialect by watching
+  which level has an effect. A single request cannot tell "the parameter was ignored" apart from "the
+  parameter worked", so that conclusion is yours to draw in a session; renaming a level is one
+  `/thinking set`.
 
 ## Development
 
@@ -235,18 +297,29 @@ Layout:
 
 ```
 src/
-  index.ts        host entry: Config, registrations, load-time diagnostic
+  index.ts        host entry: Config, registrations, load-time adaptation + diagnostic
   presets.ts      thinking levels, wire dialects, the validator (pure)
   plan.ts         declaration → settings patch (pure, shared with the browser)
+  auto.ts         which preset an undeclared route gets (pure)
   diagnose.ts     capability report (pure)
   wire.ts         what each level actually puts on the wire (pure)
+  types.ts        stored/read shapes, the settings port, dialect constants
+  json.ts         isPlainObject / deepEqual / omit (dependency-free)
   apply.ts        the settings port: read descriptor, plan, merge the write
-  commands.ts     /thinking
-  tools.ts        thinking_effort_status / thinking_effort_set
+  commands.ts     /thinking, including the `adapt` batch entry
+  tools.ts        thinking_effort_status / thinking_effort_set / thinking_effort_explain
   format.ts       shared text rendering
-  client/         browser half: the settings tab and its stylesheet
+  client/
+    index.ts      browser half entry: inject / apply
+    card.ts       the settings tab
+    styles.ts     its stylesheet
+    types.ts      structural types for the two browser services used
 test/             unit tests + a smoke test over the build output
 ```
+
+Working notes for anyone (human or agent) about to change the code — the invariants, the build
+constraints, and a verified `pnpm verify` baseline — live in [AGENTS.md](AGENTS.md)
+([简体中文](CONTEXT.zh.md)).
 
 ## License
 

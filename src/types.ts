@@ -53,8 +53,22 @@ export interface Declaration {
 export interface Config {
   /** Log one capability report at load, naming routes that cannot be adjusted. */
   diagnoseOnStart: boolean
+  /**
+   * Declare the missing capability at load for every third-party route that has
+   * none, so adding an API key needs no follow-up command.
+   *
+   * Defaults to on because that is the point of the plugin; turn it off to keep
+   * the settings document untouched until `/thinking adapt` is run by hand.
+   */
+  autoAdapt: boolean
   /** Preset pre-selected in the GUI card. */
   defaultPreset: string
+  /**
+   * The preset auto-adaptation writes when a route has no recognisable vendor
+   * dialect. A vendor the endpoint detection recognises gets that vendor's
+   * preset regardless of this value.
+   */
+  autoAdaptPreset: string
 }
 
 /** One model entry of a `llm-pi-ai` provider profile, as far as this plugin reads it. */

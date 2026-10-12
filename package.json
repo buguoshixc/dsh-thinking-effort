@@ -22,6 +22,8 @@
     "src",
     "README.md",
     "README.zh.md",
+    "AGENTS.md",
+    "CONTEXT.zh.md",
     "LICENSE"
   ],
   "dsh": {

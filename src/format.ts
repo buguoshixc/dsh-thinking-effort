@@ -7,7 +7,16 @@
  * @module dsh-thinking-effort/format
  */
 
-import { PRESETS, THINKING_LEVELS, type LevelWire } from './presets.ts'
+import { deepEqual } from './json.ts'
+import {
+  AUTO_FALLBACK_PRESET,
+  findPreset,
+  normalizeLevels,
+  PRESETS,
+  THINKING_LEVELS,
+  type LevelWire,
+} from './presets.ts'
+import type { AdaptOutcome, AdaptPlan } from './auto.ts'
 import type { ModelCapability, RouteCapability } from './diagnose.ts'
 
 /** Render one declared map as `off→(不发) low→low high→high`. */
@@ -49,9 +58,21 @@ export function renderRoutes(routes: readonly RouteCapability[]): string {
   }
   const broken = routes.flatMap((route) =>
     route.models.filter((model) => !model.adjustable).map((model) => `${route.provider}/${model.id}`))
+  // Names the preset auto-adaptation writes, so a user who never ran a command
+  // can still learn which declaration appeared and that it is changeable. The
+  // test is level-shape equality, not "7 levels": a hand-written map that happens
+  // to match passthrough is indistinguishable from it and reads correctly anyway.
+  const fallbackLevels = findPreset(AUTO_FALLBACK_PRESET)?.levels ?? {}
+  const autoWritten = routes.some((route) =>
+    route.declared && route.models.some((model) =>
+      model.declared !== undefined && deepEqual(model.declared, fallbackLevels)))
   lines.push('')
   if (broken.length === 0) {
     lines.push('✅ 所有模型都可调节思考强度。')
+    if (autoWritten) {
+      lines.push(`   与本插件自动写入的 ${AUTO_FALLBACK_PRESET} 档位表相同的自声明路由：`)
+      lines.push('   七档同名透传、不锁方言。想换档位名或方言：/thinking set <provider>/<model> <preset>。')
+    }
   } else {
     lines.push(`❌ ${broken.length} 个模型无法调节思考强度：${broken.join('、')}`)
     const example = broken[0] ?? 'qiyuan/model'
@@ -73,4 +94,49 @@ export function renderPresets(): string {
     '  custom         自定义\n                 档位与发送值由调用方给出（levels）。',
     '  inherit        只固定方言/默认档位，不改动档位表。',
   ].join('\n')
+}
+
+/**
+ * Render the result of an auto-adaptation pass.
+ *
+ * Two audiences read this text: the load-time log and the `adapt` subcommand. It
+ * therefore states every write and, just as importantly, states what it refused
+ * to touch — a route that is quietly skipped is the one thing a user cannot
+ * discover from the capability report alone.
+ *
+ * @param plan - what auto-adaptation decided, from `adaptPlan`.
+ * @param outcomes - one result per attempted declaration.
+ * @returns a multi-line report, ending without a trailing newline.
+ */
+export function renderAdapt(plan: AdaptPlan, outcomes: readonly AdaptOutcome[]): string {
+  const lines: string[] = []
+  const perRoute = new Map<string, { preset: string; reason: string; models: number }>()
+  for (const outcome of outcomes) {
+    if (!outcome.ok || outcome.unchanged) continue
+    const { provider, preset, reason } = outcome.adjustment
+    const group = perRoute.get(provider) ?? { preset, reason, models: 0 }
+    group.models += 1
+    perRoute.set(provider, group)
+  }
+  if (perRoute.size === 0) {
+    lines.push('✅ 没有需要自动声明的模型。')
+  } else {
+    const total = [...perRoute.values()].reduce((sum, group) => sum + group.models, 0)
+    lines.push(`✅ 已自动声明 ${total} 个模型的思考强度档位：`)
+    for (const [provider, group] of perRoute) {
+      lines.push(`  路由 ${provider} → ${group.preset}（${group.models} 个模型）`)
+      lines.push(`    ${group.reason}`)
+      const preset = findPreset(group.preset)
+      if (preset !== undefined) lines.push(`    档位：${renderLevels(preset.levels)}`)
+    }
+    lines.push('  这是可以随时改的起点：换档位名或方言用 /thinking set，预览用 /thinking explain。')
+  }
+  for (const outcome of outcomes) {
+    if (outcome.ok) continue
+    const pair = `${outcome.adjustment.provider}/${outcome.adjustment.modelId}`
+    lines.push(`❌ ${pair} 写入失败：${outcome.problems.join(' ')}`)
+  }
+  if (plan.state.length > 0) lines.push(`  跳过（保持原样）：${plan.state.join('；')}`)
+  lines.push(...plan.problems.map((line) => `⚠ ${line}`))
+  return lines.join('\n')
 }

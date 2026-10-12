@@ -11,10 +11,11 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { applyDeclaration, piAiDescriptor, profileOf, type ApplyOutcome } from './apply.ts'
+import { adaptPlan, type AdaptOutcome, type AdaptPlan } from './auto.ts'
 import { analyzeRoutes } from './diagnose.ts'
-import { renderPresets, renderRoutes } from './format.ts'
+import { renderAdapt, renderPresets, renderRoutes } from './format.ts'
 import { findPreset, normalizeLevels, PRESETS, type LevelWire } from './presets.ts'
-import { COMMAND_NAME, type Declaration, type PiAiPort } from './types.ts'
+import { COMMAND_NAME, type Declaration, type PiAiPort, type SettingsDescriptorLike } from './types.ts'
 import { collapses, detectsThinkingFormat, previewWire, renderEffect, resolveSupportsReasoningEffort } from './wire.ts'
 
 /** What a slash command returns to the framework. */
@@ -39,6 +40,7 @@ type Parsed =
   | { action: 'help' }
   | { action: 'bad'; message: string }
   | { action: 'explain'; provider: string; model: string; preset: string | undefined }
+  | { action: 'adapt'; provider: string | undefined; preset: string | undefined }
   | { action: 'set'; provider: string; model: string; declaration: Declaration }
 
 /** The usage block. */
@@ -48,6 +50,8 @@ const USAGE = [
   `  /${COMMAND_NAME} presets                  列出可用方言预设`,
   `  /${COMMAND_NAME} explain <provider>/<model> [preset]`,
   '                                        预览每一档实际会发送的请求参数（不写入）',
+  `  /${COMMAND_NAME} adapt [provider] [--preset <id>]`,
+  '                                        自动给尚未声明的模型写入档位（省略 provider 即全部路由）',
   `  /${COMMAND_NAME} set <provider>/<model> <preset> [--format <方言>] [--default <档位>]`,
   `  /${COMMAND_NAME} set <provider> <model> <preset>`,
   `  /${COMMAND_NAME} remove <provider>/<model>  撤销本插件写入的档位声明`,
@@ -92,6 +96,31 @@ export function parseCommand(rawInput: string): Parsed {
     if (target.rest.length > 1) return { action: 'bad', message: `explain 多余的参数 "${target.rest[1] ?? ''}"。` }
     return { action: 'explain', provider: target.provider, model: target.model, preset }
   }
+  if (head === 'adapt') {
+    let provider: string | undefined
+    let preset: string | undefined
+    const rest = parts.slice(1)
+    for (let index = 0; index < rest.length; index += 1) {
+      const token = rest[index]
+      if (token === undefined) continue
+      if (token === '--preset') {
+        const value = rest[index + 1]
+        if (value === undefined) return { action: 'bad', message: '--preset 需要一个值。' }
+        preset = value
+        index += 1
+        continue
+      }
+      if (token.startsWith('--')) return { action: 'bad', message: `未知的选项 "${token}"。` }
+      if (provider !== undefined) return { action: 'bad', message: `多余的参数 "${token}"。` }
+      provider = token
+    }
+    // The provider is optional and the preset is the configured default, so a
+    // bad value here would only fail after a write-shaped plan was built.
+    if (preset !== undefined && preset !== 'custom' && preset !== 'inherit' && findPreset(preset) === undefined) {
+      return { action: 'bad', message: `未知的 preset "${preset}"；可用：${PRESETS.map((p) => p.id).join('、')}。` }
+    }
+    return { action: 'adapt', provider, preset }
+  }
   if (head !== 'set' && head !== 'remove') {
     return { action: 'bad', message: `未知的子命令 "${head}"。` }
   }
@@ -129,6 +158,59 @@ export function parseCommand(rawInput: string): Parsed {
   }
   declaration.preset = presetId
   return { action: 'set', provider: target.provider, model: target.model, declaration }
+}
+
+/**
+ * Apply the auto-adaptation plan for every route that has no declaration yet.
+ *
+ * This is the one place a batch of declarations is written, shared by the
+ * `adapt` subcommand and the load-time pass so both report the same facts. The
+ * descriptor is passed in rather than re-read: the load-time caller needs to
+ * know whether the adapter was mounted at all, and a second read could disagree
+ * with the first.
+ *
+ * Writes are serial, not concurrent: `settings.update` is revision-fenced, and
+ * two overlapping merges into the same section would make one of them lose the
+ * revision race for no gain.
+ *
+ * @param port - the settings port.
+ * @param descriptor - the resolved `llm-pi-ai` descriptor.
+ * @param declaredRoutes - provider keys the adapter reports as configuration-declared only.
+ * @param provider - restrict the pass to one route, when given.
+ * @param fallback - the preferred preset for routes with no vendor signal.
+ * @returns the plan and one outcome per attempted declaration.
+ */
+export async function adaptDeclaredModels(
+  port: PiAiPort,
+  descriptor: SettingsDescriptorLike,
+  declaredRoutes: Iterable<string>,
+  provider: string | undefined,
+  fallback: string,
+): Promise<{ plan: AdaptPlan; outcomes: AdaptOutcome[] }> {
+  const full = adaptPlan(descriptor.value, declaredRoutes, fallback)
+  const plan = provider === undefined
+    ? full
+    : {
+      adjustments: full.adjustments.filter((adjustment) => adjustment.provider === provider),
+      // Problems and skipped-state lines are keyed on the route, so the scope is
+      // decided here rather than by the planner: a `provider` argument must not
+      // report a different route's trouble as if it were this one's.
+      state: full.state.filter((line) => line.startsWith(`${provider}/`)),
+      problems: full.problems.filter((line) => line.startsWith(`路由 "${provider}"`)),
+    }
+  // The plan's reasoning rides along with each write result, so the renderer can
+  // say *why* a route got this preset without recomputing the detection.
+  const outcomes: AdaptOutcome[] = []
+  for (const adjustment of plan.adjustments) {
+    const applied = await applyDeclaration(
+      port,
+      adjustment.provider,
+      adjustment.modelId,
+      { preset: adjustment.preset },
+    )
+    outcomes.push({ adjustment, ...applied })
+  }
+  return { plan, outcomes }
 }
 
 /** Render the outcome of one apply. */
@@ -237,11 +319,15 @@ export function explainModel(
  * @param ctx - the host plugin context.
  * @param portOf - thunk returning the settings port, re-resolved on every use.
  * @param report - thunk returning the current capability report text.
+ * @param declaredRoutes - thunk returning provider keys that exist only because configuration declared them.
+ * @param preferredPreset - thunk returning the preset auto-adaptation prefers, re-read so a config edit applies without a restart.
  */
 export function registerThinkingCommand(
   ctx: Context,
   portOf: () => PiAiPort,
   report: () => string,
+  declaredRoutes: () => string[],
+  preferredPreset: () => string,
 ): void {
   ctx.inject(['commands'], (scoped) => {
     const commands = (scoped as unknown as { commands: CommandsLike }).commands
@@ -256,6 +342,23 @@ export function registerThinkingCommand(
         if (parsed.action === 'status') return { kind: 'success', text: `${report()}\n\n${USAGE}` }
         if (parsed.action === 'explain') {
           return { kind: 'success', text: explainModel(portOf(), parsed.provider, parsed.model, parsed.preset) }
+        }
+        if (parsed.action === 'adapt') {
+          const port = portOf()
+          const descriptor = piAiDescriptor(port)
+          if (descriptor === undefined) {
+            return {
+              kind: 'error',
+              text: `❌ settings 条目 "${port.ns}" 未注册：该 profile 没有挂载第三方(pi-ai)适配器，无需适配。`,
+            }
+          }
+          const fallback = parsed.preset ?? preferredPreset()
+          const result = await adaptDeclaredModels(
+            port, descriptor, declaredRoutes(), parsed.provider, fallback,
+          )
+          const text = renderAdapt(result.plan, result.outcomes)
+          const failed = result.outcomes.filter((outcome) => !outcome.ok).length
+          return { kind: failed > 0 ? 'error' : 'success', text }
         }
         const target = `${parsed.provider}/${parsed.model}`
         const outcome = await applyDeclaration(portOf(), parsed.provider, parsed.model, parsed.declaration)

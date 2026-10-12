@@ -37,6 +37,7 @@ function section() {
 function harness({ value = section() } = {}) {
   const state = { value, revision: 3 }
   const writes = []
+  const logs = []
   const registered = { commands: [], tools: [] }
   const services = {
     settings: {
@@ -65,9 +66,28 @@ function harness({ value = section() } = {}) {
       }
     },
     effect: () => {},
-    logger: { info: () => {}, warn: () => {} },
+    logger: { info: (message) => logs.push(`info: ${message}`), warn: (message) => logs.push(`warn: ${message}`) },
   }
-  return { ctx, state, writes, registered, services }
+  return { ctx, state, writes, logs, registered, services }
+}
+
+/**
+ * Mount the plugin as a profile whose settings document the test owns.
+ *
+ * Auto-adaptation is OFF in every test that counts writes: with it on, a mount
+ * also declares the broken route in the background, and a test asserting "one
+ * write happened" would have to race that pass instead of its own subject. The
+ * tests that are *about* auto-adaptation mount it directly.
+ */
+function handwritten(ctx) {
+  plugin.apply(ctx, { diagnoseOnStart: false, autoAdapt: false, defaultPreset: 'deepseek' })
+}
+
+/** Let the load-time auto-adaptation pass finish, including its async writes. */
+async function settle(times = 8) {
+  for (let index = 0; index < times; index += 1) {
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
+  }
 }
 
 test('the package manifest declares the bundle and the client half', () => {
@@ -88,7 +108,7 @@ test('the host bundle exports the cordis plugin contract', () => {
 
 test('apply registers the command and both tools', () => {
   const { ctx, registered } = harness()
-  plugin.apply(ctx, { diagnoseOnStart: false, defaultPreset: 'deepseek' })
+  handwritten(ctx)
   assert.deepEqual(registered.commands.map((entry) => entry.name), ['thinking'])
   assert.deepEqual(registered.tools.map((entry) => entry.name),
     ['thinking_effort_status', 'thinking_effort_set', 'thinking_effort_explain'])
@@ -96,7 +116,7 @@ test('apply registers the command and both tools', () => {
 
 test('the status command names the route that cannot be adjusted', async () => {
   const { ctx, registered } = harness()
-  plugin.apply(ctx, { diagnoseOnStart: false, defaultPreset: 'deepseek' })
+  handwritten(ctx)
   const result = await registered.commands[0].handler({ rawInput: '' })
   assert.equal(result.kind, 'success')
   assert.match(result.text, /qiyuan/)
@@ -110,7 +130,7 @@ test('the status command names the route that cannot be adjusted', async () => {
 
 test('the set command writes one route key through the merged settings seam', async () => {
   const { ctx, writes, registered } = harness()
-  plugin.apply(ctx, { diagnoseOnStart: false, defaultPreset: 'deepseek' })
+  handwritten(ctx)
   const result = await registered.commands[0].handler({
     rawInput: 'set qiyuan/deepseek-v4.1 deepseek',
   })
@@ -129,7 +149,7 @@ test('the set command writes one route key through the merged settings seam', as
 
 test('re-running the same declaration is a no-op', async () => {
   const { ctx, writes, registered } = harness()
-  plugin.apply(ctx, { diagnoseOnStart: false, defaultPreset: 'deepseek' })
+  handwritten(ctx)
   const command = registered.commands[0]
   await command.handler({ rawInput: 'set qiyuan/deepseek-v4.1 deepseek' })
   const before = writes.length
@@ -140,7 +160,7 @@ test('re-running the same declaration is a no-op', async () => {
 
 test('remove takes the declaration back out', async () => {
   const { ctx, writes, registered } = harness()
-  plugin.apply(ctx, { diagnoseOnStart: false, defaultPreset: 'deepseek' })
+  handwritten(ctx)
   const command = registered.commands[0]
   await command.handler({ rawInput: 'set qiyuan/deepseek-v4.1 deepseek' })
   await command.handler({ rawInput: 'remove qiyuan/deepseek-v4.1' })
@@ -152,7 +172,7 @@ test('remove takes the declaration back out', async () => {
 
 test('the model-facing tool applies the same declaration', async () => {
   const { ctx, writes, registered } = harness()
-  plugin.apply(ctx, { diagnoseOnStart: false, defaultPreset: 'deepseek' })
+  handwritten(ctx)
   const tool = registered.tools.find((entry) => entry.name === 'thinking_effort_set')
   const value = await tool.execute({ provider: 'qiyuan', model: 'deepseek-v4.1', preset: 'openai' })
   assert.match(String(value), /已写入/)
@@ -163,10 +183,84 @@ test('the model-facing tool applies the same declaration', async () => {
 test('with no pi-ai adapter mounted the command explains instead of throwing', async () => {
   const { ctx, registered } = harness({ value: { providers: {} } })
   ctx.get = () => undefined
-  plugin.apply(ctx, { diagnoseOnStart: false, defaultPreset: 'deepseek' })
+  handwritten(ctx)
   const result = await registered.commands[0].handler({ rawInput: 'status' })
   assert.equal(result.kind, 'success')
   assert.match(result.text, /未注册|没有配置任何/)
+})
+
+test('mounting the plugin declares the third-party route without being asked', async () => {
+  const { ctx, writes, logs, services } = harness()
+  plugin.apply(ctx, { diagnoseOnStart: true, autoAdapt: true, defaultPreset: 'deepseek' })
+  await settle()
+  assert.equal(writes.length, 1, 'the load-time pass declares the undeclared route exactly once')
+  const [model] = writes[0].patch.providers.qiyuan.models
+  // No vendor signal on `api.qiyuanapi.cc`, so the fallback preset goes in: all
+  // seven levels under their own names, and no dialect pinned.
+  assert.deepEqual(model.reasoningEfforts, {
+    off: null, minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max',
+  })
+  assert.equal(model.compat, undefined, 'the fallback must not pin a dialect')
+  assert.equal(model.name, 'deepseek-v4.1', 'every unowned field survives the rewrite')
+  // The same harness keeps serving the settings service, so the write is visible.
+  assert.ok(services.settings)
+  // The diagnostic must describe the state the pass produced, not the one it
+  // started from: emitting it in parallel reads the document before the writes
+  // land and prints "1 model cannot be adjusted" above the success line.
+  assert.ok(logs.some((line) => line.startsWith('info:') && line.includes('自动适配完成')))
+  assert.ok(logs.some((line) => line.startsWith('info:') && line.includes('所有 pi-ai 模型都可调节')))
+  assert.equal(logs.filter((line) => line.includes('无法调节思考强度')).length, 0)
+})
+
+test('a second mount finds nothing to declare', async () => {
+  const first = harness()
+  plugin.apply(first.ctx, { diagnoseOnStart: false, autoAdapt: true, defaultPreset: 'deepseek' })
+  await settle()
+  assert.equal(first.writes.length, 1)
+
+  // Re-mount against the section the first pass produced: the plan must come back
+  // empty rather than rewriting the same declaration on every boot.
+  const second = harness({ value: first.state.value })
+  plugin.apply(second.ctx, { diagnoseOnStart: false, autoAdapt: true, defaultPreset: 'deepseek' })
+  await settle()
+  assert.equal(second.writes.length, 0, 'an already-declared route is left alone')
+})
+
+test('auto-adapt stays off when the profile says so', async () => {
+  const { ctx, writes } = harness()
+  handwritten(ctx)
+  await settle()
+  assert.equal(writes.length, 0)
+})
+
+test('the adapt subcommand declares every undeclared route at once', async () => {
+  const { ctx, writes, registered } = harness()
+  handwritten(ctx)
+  const result = await registered.commands[0].handler({ rawInput: 'adapt' })
+  assert.equal(result.kind, 'success', result.text)
+  assert.equal(writes.length, 1)
+  assert.match(result.text, /已自动声明 1 个模型/)
+  assert.match(result.text, /passthrough/)
+  const [model] = writes[0].patch.providers.qiyuan.models
+  assert.equal(model.reasoningEfforts.max, 'max')
+})
+
+test('the adapt subcommand honours an explicit preset', async () => {
+  const { ctx, writes, registered } = harness()
+  handwritten(ctx)
+  const result = await registered.commands[0].handler({ rawInput: 'adapt --preset openai-null-off' })
+  assert.equal(result.kind, 'success', result.text)
+  assert.deepEqual(writes[0].patch.providers.qiyuan.models[0].reasoningEfforts,
+    { off: null, low: 'low', medium: 'medium', high: 'high' })
+})
+
+test('adapt refuses an unknown preset instead of writing one', async () => {
+  const { ctx, writes, registered } = harness()
+  handwritten(ctx)
+  const result = await registered.commands[0].handler({ rawInput: 'adapt --preset not-a-preset' })
+  assert.equal(result.kind, 'error')
+  assert.match(result.text, /未知的 preset/)
+  assert.equal(writes.length, 0)
 })
 
 test('the client bundle is a module-loader handshake for this package', async () => {

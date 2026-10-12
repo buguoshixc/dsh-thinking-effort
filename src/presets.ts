@@ -149,9 +149,60 @@ export const CUSTOM_PRESET = 'custom'
 /** Preset id used when a declaration should only pin a dialect, not levels. */
 export const INHERIT_PRESET = 'inherit'
 
+/**
+ * The preset a surface pre-selects, and the fallback for an unusable preference.
+ *
+ * Deliberately the first row of {@link PRESETS}: it sends only the parameter an
+ * OpenAI-compatible endpoint already understands, so a plugin that has been
+ * configured with a typo still degrades to a working control instead of failing.
+ */
+export const DEFAULT_PRESET = 'openai-null-off'
+
 /** Look up a preset by id. */
 export function findPreset(id: string): DialectPreset | undefined {
   return PRESETS.find((preset) => preset.id === id)
+}
+
+/**
+ * The preset auto-adaptation writes when no vendor signal justifies another.
+ *
+ * `passthrough` sends all seven levels under their own names without pinning a
+ * dialect, so a gateway that defines its own ladder (`minimal` … `max`) gets the
+ * whole ladder back — which is the point of adapting automatically rather than
+ * offering `low`/`medium`/`high` and stopping. A strict endpoint that rejects an
+ * unknown value names the culprit in its 400, and `/thinking set … openai-null-off`
+ * is the one-step repair.
+ *
+ * Declared here rather than in `src/auto.ts` because the status report and the
+ * diagnostic need to name it too, and those are rendered from presets.
+ */
+export const AUTO_FALLBACK_PRESET = 'passthrough'
+
+/**
+ * The preset to write for an endpoint pi-ai believes rejects `reasoning_effort`.
+ *
+ * Sending the level ladder to such a route is worse than sending nothing: it
+ * makes the composer offer levels whose parameter the endpoint will reject or
+ * ignore. This preset is the one every OpenAI-compatible parser already
+ * understands, and it is the same one the diagnostic recommends — deliberately,
+ * so auto-adaptation and the repair advice never disagree.
+ */
+export const AUTO_EXCLUDED_PRESET = 'openai-null-off'
+
+/**
+ * Resolve a configured preset id, falling back when it names nothing usable.
+ *
+ * A preset id arrives from this plugin's own composition config, which a user
+ * edits by hand; naming a preset that does not exist must narrow the result, not
+ * write a declaration `llm-pi-ai` would refuse.
+ *
+ * @param id - the configured id, possibly absent or wrong.
+ * @param fallback - what to use when `id` names no preset.
+ * @returns an id that exists in {@link PRESETS}.
+ */
+export function presetOrDefault(id: string | undefined, fallback: string = DEFAULT_PRESET): string {
+  const wanted = id !== undefined && findPreset(id) !== undefined ? id : fallback
+  return findPreset(wanted) === undefined ? DEFAULT_PRESET : wanted
 }
 
 /** Whether a string is a pi-ai thinking level. */

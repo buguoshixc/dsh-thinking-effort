@@ -41,7 +41,7 @@ if (efforts === undefined) return { reasoning: base?.reasoning ?? false }
 
 ## 本插件做了什么
 
-它把这份声明写进去——写进适配器真正读取的那一处，走官方支持的 settings 接缝。不接管适配器、不拦截 HTTP、不改 harness。
+它把这份声明写进去——写进适配器真正读取的那一处，走官方支持的 settings 接缝。不接管适配器、不拦截 HTTP、不改 harness。写入时机默认是**启动即自动**：没有任何档位声明的第三方路由会被直接补上，装完就用，不用再敲命令。
 
 ```yaml
 # 针对上面那条路由，它写入的内容
@@ -63,7 +63,8 @@ providers:
 
 | 入口 | 用法 |
 |---|---|
-| 斜杠命令 | `/thinking` · `/thinking presets` · `/thinking set <provider>/<model> <preset>` · `/thinking remove …` |
+| 自动适配 | **装上就生效**：启动时给每条还没有档位声明的第三方路由自动写入声明，无需任何命令 |
+| 斜杠命令 | `/thinking` · `/thinking presets` · `/thinking adapt` · `/thinking set <provider>/<model> <preset>` · `/thinking remove …` |
 | 设置页 | 设置 → 插件 → **思考强度**，逐模型下拉选择，即时生效 |
 | 模型工具 | `thinking_effort_status` / `thinking_effort_set`，于是「这个模型调不了思考强度」可以一句话修好 |
 
@@ -98,13 +99,39 @@ dsh --profile <profile> --dump-config    # 应能看到名为 dsh-thinking-effor
 
 ## 使用
 
-一次性修好你的中转站：
+装上之后什么都不用做。新接入的第三方 Key 会在启动时被自动补上档位声明，日志里会写明给哪条路由写了哪套档位：
+
+```
+# dsh-thinking-effort: 自动适配完成。
+# ✅ 已自动声明 1 个模型的思考强度档位：
+#   路由 qiyuan → passthrough（1 个模型）
+#     端点检测为 openai，写入 passthrough
+#     档位：off→(不发) minimal→minimal low→low medium→medium high→high xhigh→xhigh max→max
+#   这是可以随时改的起点：换档位名或方言用 /thinking set，预览用 /thinking explain。
+```
+
+然后到输入框的模型选择器里展开 **推理等级**，就能看到 Off / Minimal / Low / Medium / High / XHigh / Max。选中某一档同时会写进 Agent 默认设置，和内置 provider 的行为完全一致。
+
+### 自动适配做了什么判断
+
+它只处理**配置声明出来的**第三方路由（内置目录路由本来就有能力，写声明只会收窄目录给它的档位）。对每条路由它只看配置里已有的证据：
+
+1. 如果 pi-ai 已经判定该端点**不接收** `reasoning_effort`（xAI、智谱、Moonshot、Together、NVIDIA、Cloudflare 这类，或你自己在 `compat.supportsReasoningEffort` 里写明 `false`），就写入 `openai-null-off`——往不解析该参数的端点发 `xhigh` 才是唯一可能把"选择器不见了"变成"请求报 400"的做法。你的显式设置优先于插件的推断。
+2. 否则，如果端点主机能认出厂商（`deepseek.com`、`openrouter.ai`、DashScope 等），就写入该厂商的预设。
+3. 其余情况写入 `autoAdaptPreset`，默认 `passthrough`：七档按同名值原样发送、不锁方言。中转站如果自己定义了一套档位名，这样能把整条阶梯都拿回来。
+
+它**不会**覆盖你已经声明过的模型，也不会碰 `reasoningEfforts: false` 的模型——那是"这个模型不支持推理"的明确表态，不该被自动改回去。
+
+自动适配补的是**声明**，它不能替你验证端点是否真的认这些参数——这从配置里读不出来。所以看到自动写入的日志后，用 `/thinking explain` 看一遍每档实际发送的参数，再到会话里试一档。
+
+### 手动调整
+
+自动写入的是一个可以随时改的起点。查看现状、换档位名、只修某条路由：
 
 ```
 /thinking
 # 路由 qiyuan（自声明路由）
-#   - deepseek-v4.1: ❌ 不可调 · 未声明 reasoningEfforts 且该路由不在内置目录里。
-# ❌ 1 个模型无法调节思考强度：qiyuan/deepseek-v4.1
+#   - deepseek-v4.1: 可调 · 档位 off / minimal / low / medium / high / xhigh / max
 
 /thinking explain qiyuan/deepseek-v4.1
 # 路由 qiyuan · deepseek-v4.1
@@ -116,11 +143,21 @@ dsh --profile <profile> --dump-config    # 应能看到名为 dsh-thinking-effor
 #     low      {"reasoning_effort":"low"}
 #     ...
 
-/thinking set qiyuan/deepseek-v4.1 openai-null-off
+/thinking set qiyuan/deepseek-v4.1 deepseek-relay
 # ✅ 已写入 qiyuan/deepseek-v4.1 的思考强度声明。
 ```
 
-然后在输入框的模型选择器里展开 **推理等级** → Off / Low / Medium / High。选中某一档同时会写进 Agent 默认设置，和内置 provider 的行为完全一致。
+`/thinking adapt` 可以手动再跑一次全量适配：`/thinking adapt qiyuan --preset deepseek-relay` 只修一条路由并指定档位表。
+
+关掉自动适配（本插件的 profile 配置）：
+
+```yaml
+- id: dsh-thinking-effort
+  name: 'dsh-thinking-effort'
+  config:
+    autoAdapt: false          # 只在 /thinking adapt 时写入
+    autoAdaptPreset: passthrough
+```
 
 ### 方言预设
 
@@ -155,7 +192,9 @@ dsh --profile <profile> --dump-config    # 应能看到名为 dsh-thinking-effor
 
 看 diff 之前有件事值得先知道。被重写的 `models` 数组是从**解析后**的配置构造的，因此解析器已经填好的 schema 默认值会一起落进存储文档——在自声明路由上声明档位后，那个模型条目通常会在本插件真正写入的 `thinkingFormat` 旁边多出 `compat.chatTemplateKwargs: {}` 和 `compat.chatTemplateArgs: {}`。它们就是 schema 自己的默认值，解析结果没有任何变化、行为也没有任何不同，只是文档对原本隐式的字段变得更显式。写入在路由层面仍然是窄的：用户层里只出现你指名的那条路由，也不会写入任何路由级默认值。
 
-写入用同一次读取拿到的 revision 做乐观并发围栏（检测到并发编辑会报出并重试一次），而已经生效的声明则完全不写。
+写入用同一次读取拿到的 revision 做乐观并发围栏（检测到并发编辑会报出并重试一次），而已经生效的声明则完全不写。自动适配因此是幂等的：第一次启动写进去，之后每次启动都是零写入的空转——它不需要记住自己写过什么，已生效的声明本身就让它无事可做。
+
+自动适配与启动自检在同一个注入点按顺序执行，**先适配、后自检**：这样日志里的"所有模型都可调节"描述的是刚刚落地的状态，而不是一个即将成立的状态。settings 服务可能先于 pi-ai 适配器注册好，所以适配失败时会以半秒间隔重试至多五次，之后才放弃并提示手动运行 `/thinking adapt`。
 
 设置条目 id 取自适配器自己的可配置 provider 目录（`listConfigurableProviders().settingsNs`），所以即使 profile 重命名了 loader 条目也仍然可用；`llm-pi-ai` 只是兜底值。
 
@@ -163,7 +202,7 @@ dsh --profile <profile> --dump-config    # 应能看到名为 dsh-thinking-effor
 
 - **不动路由级字段的移除。** `remove` 只剥掉 `reasoningEfforts` 和本插件写过的 `thinkingFormat`，不碰 `reasoning` / `thinkingBudgets`：`update` 是合并，JSON 里没有 `undefined` 可以合并进去，而要 unset 不属于自己的字段就得对别人的配置做路径操作。
 - **不重写 HTTP 层。** 请求体没有受支持的拦截点，而调用配置是深冻结的，改它直接抛异常。声明能力才是受支持的路径。
-- **不猜方言。** 端点认哪些值无法从配置里发现；猜错的结果是一个看起来能用、实际什么都没发对的选择器。请自己挑预设。
+- **不主动探测端点。** 自动适配只在配置已有的证据上做保守判断，既不会拿你的 Key 去发测试请求，也不会通过"看哪档有反应"来反推方言——单次请求分不清"参数被忽略"和"参数生效"，那个结论得由你在会话里得出。改档位名是一次 `/thinking set`。
 
 ## 开发
 
@@ -181,18 +220,28 @@ pnpm verify        # 以上三步
 
 ```
 src/
-  index.ts        host 入口：Config、各注册、启动自检
+  index.ts        host 入口：Config、各注册、启动自动适配与自检
   presets.ts      思考档位、线协议方言、校验器（纯函数）
   plan.ts         声明 → 设置补丁（纯函数，浏览器半边共用）
+  auto.ts         自动适配的选档规划（纯函数：哪条路由该拿哪套档位）
   diagnose.ts     能力报告（纯函数）
   wire.ts         每一档实际会往请求里发什么（纯函数）
+  types.ts        存取形状、settings 端口、方言常量
+  json.ts         isPlainObject / deepEqual / omit（零依赖）
   apply.ts        settings 端口：读描述符、规划、合并写入
-  commands.ts     /thinking
-  tools.ts        thinking_effort_status / thinking_effort_set
+  commands.ts     /thinking（含 adapt 批量入口）
+  tools.ts        thinking_effort_status / thinking_effort_set / thinking_effort_explain
   format.ts       共用文本渲染
-  client/         浏览器半边：设置页签与样式表
+  client/
+    index.ts      浏览器半边入口：inject / apply
+    card.ts       设置页签
+    styles.ts     样式表
+    types.ts      所涉两个浏览器服务的结构类型
 test/             单元测试 + 针对构建产物的冒烟测试
 ```
+
+动手改代码之前该知道的东西 —— 设计不变量、构建约束、以及一份实测的 `pnpm verify` 基线 ——
+写在 [CONTEXT.zh.md](CONTEXT.zh.md)（[English](AGENTS.md)）里。
 
 ## 许可证
 
