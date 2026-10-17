@@ -110,10 +110,28 @@ export interface SettingsDescriptorLike {
   revision: number
 }
 
+/**
+ * One path-addressed settings edit.
+ *
+ * The structural twin of the host service's `SettingsPathOp` and the browser
+ * remote's `SettingsPathOpView`: `set` writes the value at the path, creating
+ * intermediate objects, and `unset` removes it. Both halves send these, so the
+ * command, the tools and the GUI cannot write different documents.
+ */
+export type SettingsPathOp =
+  | { op: 'set', path: string[], value: unknown }
+  | { op: 'unset', path: string[] }
+
 /** The slice of `ctx.settings` this plugin uses. */
 export interface SettingsLike {
   describe(options?: { redactSecrets?: boolean }): SettingsDescriptorLike[]
-  update(ns: string, patch: object, expectedRevision?: number): Promise<void>
+  /**
+   * Apply path ops to the section's user layer as one revision-fenced write.
+   * Unlike `update`, a `set` replaces the value at its own leaf instead of
+   * merging objects, which is what lets a catalog route's override entry drop
+   * fields a removal no longer wants.
+   */
+  mutate(ns: string, ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<void>
 }
 
 /**

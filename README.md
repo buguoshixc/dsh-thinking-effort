@@ -7,7 +7,7 @@ Bring back the **thinking-intensity picker** (推理等级 / reasoning effort) f
 
 You plug an OpenAI-compatible relay into `dsh`, pick one of its models, and the
 「推理等级」 pane in the composer is simply gone. This plugin declares the missing capability for
-those routes, so the picker comes back — from a slash command, from a settings tab, or by asking
+those routes, so the picker comes back — from a slash command, from the Plugins page, or by asking
 the model.
 
 ---
@@ -77,7 +77,7 @@ Four entry points over one shared, unit-tested planner:
 |---|---|
 | Automatic | **Nothing to run**: a load-time pass declares every third-party route that has none |
 | Slash command | `/thinking` · `/thinking presets` · `/thinking adapt` · `/thinking set <provider>/<model> <preset>` · `/thinking remove …` |
-| Settings tab | Settings → Plugins → **思考强度** — per-model dropdown, applies instantly |
+| Plugins page | Sidebar **Plugins** → **dsh-thinking-effort** → per-model dropdown, applies instantly |
 | Model tool | `thinking_effort_status` / `thinking_effort_set`, so "这个模型调不了思考强度" gets fixed conversationally |
 
 A load-time diagnostic also names every route that still cannot be adjusted, so a freshly added key
@@ -113,6 +113,17 @@ dsh --profile <profile> --dump-config    # expect a row named dsh-thinking-effor
 
 > On the Windows desktop build the `desktop` profile is reserved and file-locked by the running app:
 > **quit DeepSeek Harness before installing into it.**
+
+### Compatibility
+
+Built for dsh **0.2.1-rc.2**. The peer dependencies pin that release, `engines.dsh` declares
+`>=0.2.1-rc.2 <0.3.0`, and `dsh.manifestVersion` records the 0.2.1 package-manifest format.
+
+The integration points are the 0.2.1 ones: host writes go through `ctx.settings.mutate` (path ops),
+the browser card through the settings domain's `ctx.configForms` service, and a third-party
+bundle's own configuration page registers in the `plugins.bundle.config` slot of the sidebar
+**Plugins** page. The pre-0.2 client binder (`settingsScope`) no longer exists in dsh, so versions
+before 0.2.1 are not supported.
 
 ## Usage
 
@@ -227,15 +238,21 @@ Overrides: `/thinking set qiyuan/m deepseek --format deepseek --default high`.
 
 ## How it works
 
-`settings.update(entryId, { providers: { <route>: … } })` **merges**, so supplying one route key
-leaves every other route — and every field of this route it does not own — untouched. The shape of
-the patch depends on where the route's capability comes from, because `mergeLayers` replaces arrays
-wholesale and `llm-pi-ai` refuses `modelOverrides` on a route that also carries a `models` list:
+Writes are **path-addressed settings mutations**:
+`settings.mutate(entryId, settingsOps(provider, patch), revision)`. Each op names one path —
+`providers.<route>.models`, `providers.<route>.modelOverrides.<model>`,
+`providers.<route>.reasoning` — so only the edited route (and, inside a catalog route, only the
+edited model) is touched; sibling routes and unowned fields survive without a read-modify-write.
+The browser card sends the same op list through `ctx.configForms`, so the command, the tools and
+the GUI cannot write different documents.
+
+The shape of the patch depends on where the route's capability comes from, because `llm-pi-ai`
+refuses `modelOverrides` on a route that also carries a `models` list:
 
 - a route with a non-empty `models` list (every hand-declared third-party route) → the list is
   **rewritten in full**, carrying every entry and every unowned field through;
-- a route inheriting the installed catalog → a `modelOverrides` entry, a dict that merges and never
-  narrows the served catalog.
+- a route inheriting the installed catalog → one `modelOverrides.<model>` entry, set as its own
+  path op so the rest of the dict keeps serving.
 
 One side effect is worth knowing before you read the diff. The rewritten `models` array is built from
 the *resolved* section, so schema defaults the resolver had already materialized ride along into the
@@ -255,19 +272,23 @@ is itself what leaves it with nothing to do.
 Adaptation and the diagnostic run at the same injection point, adaptation first, so a log line
 saying "every model is adjustable" describes the state the pass just produced rather than one about
 to arrive. The settings service can register before the pi-ai adapter does, so a pass that finds no
-descriptor retries up to five times at half-second intervals before giving up and pointing at
+descriptor waits half a second and retries, up to five times, before giving up and pointing at
 `/thinking adapt`.
 
-The settings entry id is taken from the adapter's own configurable-provider directory
-(`listConfigurableProviders().settingsNs`), so a profile that renames the loader entry still works;
-`llm-pi-ai` is only the fallback.
+The settings entry id is discovered by **shape**, not by directory position:
+`listConfigurableProviders()` is registration-ordered, and in 0.2.1 the `llm-deepseek` adapter
+registers before `llm-pi-ai`, so "the first namespace" resolves to a section with no `providers`
+dict. The plugin picks the entry whose settings path is `['providers', …]` (or whose section really
+carries a `providers` dict), with the shipped `llm-pi-ai` id as the tie-break; a profile that
+renames the loader entry still resolves. (The browser card binds the shipped id, exactly as dsh's
+built-in Models page does.)
 
 ## What it deliberately does not do
 
-- **No route-level removal.** `remove` strips `reasoningEfforts` and the `thinkingFormat` this plugin
-  wrote. It leaves `reasoning` / `thinkingBudgets` alone: `update` merges, JSON has no `undefined` to
-  merge in, and unsetting fields this plugin does not own would need a path op against somebody
-  else's config.
+- **No route-level removal.** `remove` strips the `reasoningEfforts` and `compat.thinkingFormat` this
+  plugin owns from the model entry. It leaves route-level `reasoning` / `thinkingBudgets` alone:
+  the declaration never owned them, so removing a level map should not silently change the route's
+  default.
 - **No HTTP-layer rewriting.** There is no supported interceptor for the request body, and mutating
   the frozen call config throws. Declaring the capability is the supported path.
 - **No probing of the endpoint.** Automatic adaptation judges only the evidence already in the
@@ -299,19 +320,19 @@ Layout:
 src/
   index.ts        host entry: Config, registrations, load-time adaptation + diagnostic
   presets.ts      thinking levels, wire dialects, the validator (pure)
-  plan.ts         declaration → settings patch (pure, shared with the browser)
+  plan.ts         declaration → path-addressed settings ops (pure, shared with the browser)
   auto.ts         which preset an undeclared route gets (pure)
   diagnose.ts     capability report (pure)
   wire.ts         what each level actually puts on the wire (pure)
   types.ts        stored/read shapes, the settings port, dialect constants
   json.ts         isPlainObject / deepEqual / omit (dependency-free)
-  apply.ts        the settings port: read descriptor, plan, merge the write
+  apply.ts        the settings port: read descriptor, plan, apply path ops
   commands.ts     /thinking, including the `adapt` batch entry
   tools.ts        thinking_effort_status / thinking_effort_set / thinking_effort_explain
   format.ts       shared text rendering
   client/
     index.ts      browser half entry: inject / apply
-    card.ts       the settings tab
+    card.ts       the configuration card on the Plugins page
     styles.ts     its stylesheet
     types.ts      structural types for the two browser services used
 test/             unit tests + a smoke test over the build output

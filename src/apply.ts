@@ -1,14 +1,15 @@
 /**
  * The Node half's settings port: read the effective `llm-pi-ai` section, plan an
- * edit, and merge the result into that section's user layer.
+ * edit, and apply it to that section's user layer.
  *
  * All of the judgement lives in `src/plan.ts`; this module is the thin,
  * side-effecting shell around it. Two properties matter here:
  *
- * - **the write is a merge**, `settings.update(ns, { providers: { <route>: ... } })`.
- *   `mergeLayers` recurses through plain objects, so supplying one route key
- *   leaves every other route — and every other field of this route — exactly as
- *   the composition layer or the user had it.
+ * - **the write is path-addressed**, `settings.mutate(ns, settingsOps(...))`.
+ *   The planner names one route — and inside a catalog route's `modelOverrides`,
+ *   one model id — so every other route and every unowned field survives
+ *   without a read-modify-write. `update`'s recursive merge is deliberately not
+ *   used: it would keep a stale override field the plan dropped.
  * - **the write is revision-fenced**, using the revision read in the same pass,
  *   so a concurrent editor is reported rather than silently overwritten. A
  *   conflict is retried once against a fresh read.
@@ -17,7 +18,7 @@
  */
 
 import { isPlainObject } from './json.ts'
-import { planDeclaration } from './plan.ts'
+import { planDeclaration, settingsOps } from './plan.ts'
 import type { Declaration, PiAiPort, PiAiSection, ProfileLike, SettingsDescriptorLike } from './types.ts'
 
 /** The result of attempting one declaration. */
@@ -91,7 +92,7 @@ export async function applyDeclaration(
     if (!plan.ok) return { ok: false, unchanged: false, problems: plan.problems, notes: plan.notes }
     if (plan.unchanged) return { ok: true, unchanged: true, problems: [], notes: [] }
     try {
-      await settings.update(port.ns, { providers: { [provider]: plan.patch } }, descriptor.revision)
+      await settings.mutate(port.ns, settingsOps(provider, plan.patch), descriptor.revision)
       return { ok: true, unchanged: false, problems: [], notes: plan.notes }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

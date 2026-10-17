@@ -21,29 +21,16 @@ import { NAMESPACE } from '../types.ts'
 
 const CSS = `
 .dte-card {
-  list-style: none;
-  margin: 0 0 8px;
+  margin: 0;
+  padding: 12px 16px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);
-  overflow: hidden;
 }
-.dte-card:hover { border-color: var(--dsw-alias-label-dimmed); }
-.dte-card-open { background: var(--dsw-alias-bg-layer-2); border-color: var(--dsw-alias-label-dimmed); }
-.dte-header {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 12px 16px; border: 0; background: none; font: inherit; text-align: left; cursor: pointer;
-}
-.dte-header:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; }
-.dte-head-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
-.dte-name { font-size: 15px; font-weight: 600; line-height: 1.4; color: var(--dsw-alias-label-primary); }
-.dte-description { font-size: 13px; line-height: 1.5; color: var(--dsw-alias-label-tertiary); }
-.dte-chevron { flex: none; color: var(--dsw-alias-label-tertiary); transition: transform .16s; }
-.dte-chevron-open { transform: rotate(180deg); }
-.dte-body { border-top: 1px solid var(--dsw-alias-border-l2); margin: 0 16px; padding: 4px 0 12px; }
-.dte-status-title { margin: 12px 0 0; font-size: 14px; font-weight: 600; line-height: 1.4; color: var(--dsw-alias-label-primary); }
-.dte-status-body { margin: 4px 0 0; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-tertiary); }
-.dte-route { margin-top: 12px; }
+.dte-section-title { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.5; color: var(--dsw-alias-label-primary); }
+.dte-status-title { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.4; color: var(--dsw-alias-label-primary); }
+.dte-status-body { margin: 6px 0 0; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-tertiary); }
+.dte-route { margin-top: 14px; }
 .dte-route-name { margin: 0; font-size: 13px; font-weight: 600; line-height: 1.5; color: var(--dsw-alias-label-primary); }
 .dte-route-tag { margin-left: 6px; font-weight: 400; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
 .dte-model {
@@ -74,7 +61,7 @@ const CSS = `
 .dte-btn-primary { background: var(--dsw-alias-label-primary); color: var(--dsw-alias-bg-layer-3); border-color: transparent; }
 .dte-note { margin: 8px 0 0; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-tertiary); }
 .dte-failed { margin: 8px 0 0; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-state-error-primary); white-space: pre-wrap; }
-.dte-hint { margin: 8px 0 0; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-tertiary); }
+.dte-hint { margin: 6px 0 0; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-tertiary); }
 `
 
 let injected = false

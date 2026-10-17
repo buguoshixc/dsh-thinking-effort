@@ -1,27 +1,31 @@
 /**
- * The settings card: Settings → Plugins → Configurable.
+ * The plugin's configuration page: sidebar **Plugins** → `dsh-thinking-effort`.
  *
  * It shows, per route and model, whether thinking intensity is adjustable — and
  * lets the user declare it with one dropdown instead of hand-editing
  * `settings.yaml`. This is the click-driven twin of `/thinking`.
  *
+ * ## Where the page lives in dsh 0.2.1
+ *
+ * A third-party installed bundle renders its own configuration on its bundle
+ * page, through the `plugins.bundle.config` keyed slot (key = npm package name).
+ * `settings.plugins.tab` is the built-in plugins inventory; its owner's README
+ * says configuration happens on the Plugins page, so that is where this card
+ * registers. The page draws the title, icon and crumb; this component renders
+ * only its body (`div`, never a list item).
+ *
  * ## Data path
  *
- * The card binds TWO namespaces:
+ * The card reads and writes the `llm-pi-ai` namespace through the settings
+ * domain's shared `configForms` service: `ctx.configForms.get('llm-pi-ai')`
+ * returns the same form every editor of that entry uses, so the GUI, the slash
+ * command and the tools always agree. Writes are path-addressed
+ * (`providers.<route>…`), atomic, and revision-fenced by the service — never
+ * `set('providers', …)`, which would replace every route in the user layer.
  *
- * - `llm-pi-ai` — read for the live capability report, written when the user
- *   applies a dialect;
- * - its own card is registered under this plugin's namespace key, which is what
- *   the keyed `settings.plugin.item` slot expects.
- *
- * ## Why the write merges the user layer by hand
- *
- * `settingsScope.set(field, value)` addresses one TOP-LEVEL field and replaces
- * it, so writing `providers` would drop any other provider override the user
- * already had. The card therefore reads the stored user layer out of the
- * snapshot, merges the single route into it, and writes the result back — the
- * same one-route-at-a-time shape the host half gets from `settings.update`'s
- * recursive merge.
+ * The card only exists while the Host serves the namespace: it registers through
+ * `configForms.whileServed`, so a profile without the pi-ai adapter shows no
+ * trace of it.
  *
  * @module dsh-thinking-effort/client/card
  */
@@ -30,14 +34,16 @@ import React from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import { profileOf } from '../apply.ts'
 import { analyzeRoutes, type ModelCapability, type RouteCapability } from '../diagnose.ts'
-import { isPlainObject } from '../json.ts'
-import { planDeclaration } from '../plan.ts'
+import { planDeclaration, settingsOps } from '../plan.ts'
 import { PRESETS } from '../presets.ts'
 import { LLM_PI_AI_NAMESPACE, NAMESPACE } from '../types.ts'
-import type { SettingsScopeLike, SettingsSnapshot } from './types.ts'
+import type { ConfigFormLike, ConfigFormsLike } from './types.ts'
 
 /** The sentinel a select carries for "remove what this plugin wrote". */
 const REMOVE = '__remove__'
+
+/** The slot a plugin's own bundle page declares for its configuration. */
+const BUNDLE_CONFIG_SLOT = 'plugins.bundle.config'
 
 /** Badge text plus whether it reads as a problem. */
 function badgeOf(model: ModelCapability): { text: string, bad: boolean } {
@@ -62,14 +68,23 @@ function hintOf(model: ModelCapability, provider: string): string | undefined {
     + `这正是无法调节思考强度的原因；选一个方言后点「应用」即可，例如 ${provider}/${model.id}。`
 }
 
-/** Apply one preset (or a removal) to one model by merging the stored user layer. */
+/**
+ * Apply one preset (or a removal) to one model with one atomic, revision-fenced
+ * path-op write.
+ *
+ * @param form - the shared `llm-pi-ai` form.
+ * @param provider - provider route key.
+ * @param modelId - model id within that route.
+ * @param presetId - a preset id, or {@link REMOVE}.
+ * @returns the user-facing result message.
+ */
 async function applyDeclaration(
-  scope: SettingsScopeLike,
+  form: ConfigFormLike,
   provider: string,
   modelId: string,
   presetId: string,
 ): Promise<string> {
-  const snapshot = scope.getSnapshot()
+  const snapshot = form.getSnapshot()
   const declaration = presetId === REMOVE ? { remove: true } : { preset: presetId }
   const plan = planDeclaration({
     provider,
@@ -80,13 +95,10 @@ async function applyDeclaration(
   if (!plan.ok) throw new Error(plan.problems.join('\n'))
   if (plan.unchanged) return `${provider}/${modelId} 已经是该声明，未做改动。`
 
-  const user = isPlainObject(snapshot.user) ? snapshot.user : {}
-  const userProviders = isPlainObject(user['providers']) ? user['providers'] as Record<string, unknown> : {}
-  const routeUser = isPlainObject(userProviders[provider]) ? userProviders[provider] as Record<string, unknown> : {}
-  await scope.set('providers', {
-    ...userProviders,
-    [provider]: { ...routeUser, ...plan.patch },
-  })
+  const ops = settingsOps(provider, plan.patch)
+  if (ops.length === 0) return `${provider}/${modelId} 已经是该声明，未做改动。`
+  const accepted = await form.mutate(ops)
+  if (!accepted) throw new Error('写入被 Host 拒绝：设置可能已被并发修改，请重试。')
   const notes = plan.notes.length === 0 ? '' : `（${plan.notes.join(' ')}）`
   return `已写入 ${provider}/${modelId} 的思考强度声明。${notes}`
 }
@@ -180,17 +192,13 @@ function RouteBlock(props: {
   )
 }
 
-/** A read-only explainer card, shown instead of vanishing. */
+/** A read-only explainer panel, shown instead of vanishing. */
 function statusCard(title: string, ...body: string[]): React.ReactElement {
   return React.createElement(
-    'li',
+    'div',
     { className: 'dte-card' },
-    React.createElement(
-      'div',
-      { className: 'dte-body' },
-      React.createElement('p', { className: 'dte-status-title' }, title),
-      ...body.map((line, index) => React.createElement('p', { key: index, className: 'dte-status-body' }, line)),
-    ),
+    React.createElement('p', { className: 'dte-status-title' }, title),
+    ...body.map((line, index) => React.createElement('p', { key: index, className: 'dte-status-body' }, line)),
   )
 }
 
@@ -202,34 +210,26 @@ function statusCard(title: string, ...body: string[]): React.ReactElement {
  * hook count between renders — the failure mode that crashes a card in this
  * exact slot.
  *
- * @param props - the bound scope, or undefined when the settings page is absent.
- * @returns the card element, or a status element.
+ * @param props - the form injected by {@link registerCard}.
+ * @returns the configuration panel, or a status panel.
  */
-function Card({ scope }: { scope: SettingsScopeLike | undefined }): React.ReactElement {
+function Card({ form }: { form: ConfigFormLike }): React.ReactElement {
   const [, forceRender] = React.useReducer((count: number) => count + 1, 0)
-  const [open, setOpen] = React.useState(false)
   const [drafts, setDrafts] = React.useState<Record<string, string>>({})
   const [busyKey, setBusyKey] = React.useState<string | undefined>(undefined)
   const [note, setNote] = React.useState<string | undefined>(undefined)
   const [failed, setFailed] = React.useState<string | undefined>(undefined)
-  React.useEffect(() => (scope === undefined ? undefined : scope.subscribe(forceRender)), [scope])
+  React.useEffect(() => form.subscribe(forceRender), [form])
 
-  if (scope === undefined) {
-    return statusCard(
-      '思考强度卡片未挂载',
-      '设置服务（settingsScope）未提供。web profile（dsh-web-app）自带该服务；命令行下请改用 /thinking。',
-    )
-  }
-
-  const snapshot: SettingsSnapshot = scope.getSnapshot()
+  const snapshot = form.getSnapshot()
   if (snapshot.status === 'unavailable') {
     return statusCard(
       `${LLM_PI_AI_NAMESPACE} 命名空间不可用`,
       '当前 profile 没有挂载 llm-pi-ai 适配器，或设置文档只读。命令行可运行 /thinking 查看详情。',
     )
   }
-  if (snapshot.status !== 'ready') {
-    return statusCard('正在读取 llm-pi-ai 配置…', '数据到达后本卡片会自动切换为可编辑状态。')
+  if (snapshot.status !== 'ready' || snapshot.value === undefined) {
+    return statusCard('正在读取 llm-pi-ai 配置…', '数据到达后本页面会自动切换为可编辑状态。')
   }
 
   const routes = analyzeRoutes(snapshot.value)
@@ -238,103 +238,73 @@ function Card({ scope }: { scope: SettingsScopeLike | undefined }): React.ReactE
     setBusyKey(key)
     setNote(undefined)
     setFailed(undefined)
-    void applyDeclaration(scope, provider, modelId, preset)
+    void applyDeclaration(form, provider, modelId, preset)
       .then((message) => setNote(message))
       .catch((error: unknown) => setFailed(error instanceof Error ? error.message : String(error)))
       .finally(() => setBusyKey(undefined))
   }
 
   return React.createElement(
-    'li',
-    { className: open ? 'dte-card dte-card-open' : 'dte-card' },
+    'div',
+    { className: 'dte-card' },
+    React.createElement('p', { className: 'dte-section-title' }, '思考强度（第三方 API Key）'),
     React.createElement(
-      'button',
-      {
-        type: 'button',
-        className: 'dte-header',
-        'aria-expanded': open,
-        onClick: () => setOpen(!open),
-      },
-      React.createElement(
-        'span',
-        { className: 'dte-head-text' },
-        React.createElement('span', { className: 'dte-name' }, '思考强度（第三方 API Key）'),
-        React.createElement(
-          'span',
-          { className: 'dte-description' },
-          `为 llm-pi-ai 路由声明推理等级 · ${NAMESPACE}`,
-        ),
-      ),
-      chevron(open),
+      'p',
+      { className: 'dte-hint' },
+      '为 llm-pi-ai 路由声明推理等级；写入落在 llm-pi-ai 的用户层，只影响所选路由，保存后立即生效。',
     ),
-    open
-      ? React.createElement(
-        'div',
-        { className: 'dte-body' },
-        !snapshot.writable
-          ? React.createElement('p', { className: 'dte-note', role: 'status' }, '设置文档当前只读，无法写入。')
-          : null,
-        routes.length === 0
-          ? React.createElement('p', { className: 'dte-note' }, 'llm-pi-ai 下还没有任何 provider 路由。')
-          : routes.map((route) => React.createElement(RouteBlock, {
-            key: route.provider,
-            route,
-            drafts,
-            busyKey,
-            writable: snapshot.writable,
-            onDraft: (key: string, value: string) => setDrafts((current) => ({ ...current, [key]: value })),
-            onApply: apply,
-          })),
-        note === undefined ? null : React.createElement('p', { className: 'dte-note', role: 'status' }, note),
-        failed === undefined ? null : React.createElement('p', { className: 'dte-failed', role: 'status' }, failed),
-        React.createElement(
-          'p',
-          { className: 'dte-hint' },
-          '写入落在 llm-pi-ai 的用户层，只影响所选路由；保存后立即生效，无需重启。',
-          '命令行等价操作：/thinking set <provider>/<model> <preset>。',
-        ),
-      )
+    !snapshot.writable
+      ? React.createElement('p', { className: 'dte-note', role: 'status' }, '设置文档当前只读，无法写入。')
       : null,
-  )
-}
-
-/** The card's expand chevron, matching the built-in settings cards. */
-function chevron(open: boolean): React.ReactElement {
-  return React.createElement(
-    'svg',
-    {
-      className: open ? 'dte-chevron dte-chevron-open' : 'dte-chevron',
-      width: 14,
-      height: 14,
-      viewBox: '0 0 14 14',
-      fill: 'none',
-      xmlns: 'http://www.w3.org/2000/svg',
-      'aria-hidden': true,
-    },
-    React.createElement('path', {
-      d: 'M11.8486 5.5L11.4238 5.92383L8.69727 8.65137C8.44157 8.90706 8.21562 9.13382 8.01172 9.29785C7.79912 9.46883 7.55595 9.61756 7.25 9.66602C7.08435 9.69222 6.91565 9.69222 6.75 9.66602C6.44405 9.61756 6.20088 9.46883 5.98828 9.29785C5.78438 9.13382 5.55843 8.90706 5.30273 8.65137L2.57617 5.92383L2.15137 5.5L3 4.65137L3.42383 5.07617L6.15137 7.80273C6.42595 8.07732C6.59876 8.24849C6.74023 8.3623C6.87291 8.46904C6.92272 8.47813C6.9375 8.48047C6.97895 8.48703C7.02105 8.48703C7.0625 8.48047C7.07728 8.47813C7.12709 8.46904C7.25977 8.3623C7.40124 8.24849C7.57405 8.07732C7.84863 7.80273L10.5762 5.07617L11 4.65137L11.8486 5.5Z',
-      fill: 'currentColor',
-    }),
+    routes.length === 0
+      ? React.createElement('p', { className: 'dte-note' }, 'llm-pi-ai 下还没有任何 provider 路由。')
+      : routes.map((route) => React.createElement(RouteBlock, {
+        key: route.provider,
+        route,
+        drafts,
+        busyKey,
+        writable: snapshot.writable,
+        onDraft: (key: string, value: string) => setDrafts((current) => ({ ...current, [key]: value })),
+        onApply: apply,
+      })),
+    note === undefined ? null : React.createElement('p', { className: 'dte-note', role: 'status' }, note),
+    failed === undefined ? null : React.createElement('p', { className: 'dte-failed', role: 'status' }, failed),
+    React.createElement(
+      'p',
+      { className: 'dte-hint' },
+      '命令行等价操作：/thinking set <provider>/<model> <preset>。',
+    ),
   )
 }
 
 /**
- * Register the card on the `settings.plugins.tab` slot.
+ * Register the card on the Plugins page for this bundle.
  *
- * A tab rather than a `settings.plugin.item` card: that slot is keyed by
- * settings entry id, so a custom card there competes with the entry's own
- * generated page, while a tab is a plain list entry that cannot collide.
+ * `plugins.bundle.config` is keyed by the npm package name, and the page passes
+ * no form for a bundle-wide entry (a bundle can carry several Host entries), so
+ * the card obtains its own `llm-pi-ai` form through the slot's `inject` face.
+ *
+ * The registration is wrapped in `ctx.effect`: `whileServed`'s disposer is
+ * caller-owned, and a profile that never serves `llm-pi-ai` must show no trace
+ * of the page.
  *
  * @param ctx - the client plugin context.
+ * @param forms - the settings domain's shared forms service.
  */
-export function registerCard(ctx: Context): void {
-  const binder = ctx.get('settingsScope') as { bind(spec: { namespace: string }): SettingsScopeLike } | undefined
-  const scope = binder === undefined ? undefined : binder.bind({ namespace: LLM_PI_AI_NAMESPACE })
-  if (binder === undefined) {
-    console.warn(`[${NAMESPACE}] settingsScope service absent; the card shows the unmounted state`)
-  }
-  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register(
-    { name: 'settings.plugins.tab', id: NAMESPACE, order: 30, label: '思考强度' },
-    () => React.createElement(Card, { scope }),
-  ))
+export function registerCard(ctx: Context, forms: ConfigFormsLike): void {
+  ctx.effect(
+    () => forms.whileServed([LLM_PI_AI_NAMESPACE], () => ctx.slots.inject(
+      BUNDLE_CONFIG_SLOT,
+      () => ctx.slots.register(
+        {
+          name: BUNDLE_CONFIG_SLOT,
+          key: NAMESPACE,
+          registrant: NAMESPACE,
+          inject: () => ({ configForm: forms.get(LLM_PI_AI_NAMESPACE) }),
+        },
+        ({ configForm }: { configForm: ConfigFormLike }) => React.createElement(Card, { form: configForm }),
+      ),
+    )),
+    `${NAMESPACE}: plugins page card`,
+  )
 }

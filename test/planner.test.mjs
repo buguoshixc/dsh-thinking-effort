@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { planDeclaration } from '../src/plan.ts'
+import { planDeclaration, settingsOps } from '../src/plan.ts'
 import { findPreset, validateLevels } from '../src/presets.ts'
 
 /** The route shape this plugin exists for: a hand-declared third-party gateway. */
@@ -279,4 +279,73 @@ test('validateLevels mirrors llm-pi-ai rules', () => {
   assert.ok(validateLevels({ off: null }).some((line) => /只声明了 off/.test(line)))
   assert.ok(validateLevels({}).length > 0)
   assert.equal(findPreset('deepseek')?.thinkingFormat, 'deepseek')
+})
+
+test('a plan patch becomes path ops that touch exactly one route', () => {
+  const plan = planDeclaration({
+    provider: 'qiyuan',
+    modelId: 'deepseek-v4.1',
+    declaration: { preset: 'deepseek' },
+    profile: declaredRoute(),
+  })
+  assert.deepEqual(settingsOps('qiyuan', plan.patch), [
+    { op: 'set', path: ['providers', 'qiyuan', 'models'], value: plan.patch.models },
+  ])
+})
+
+test('catalog-route overrides are decomposed per model id', () => {
+  // A catalog route has no models list; its capability lives in modelOverrides.
+  // Setting the whole dict would drop an override for a model this edit is not
+  // touching, so each model id gets its own op.
+  const profile = { modelOverrides: { other: { reasoningEfforts: { off: null, high: 'high' } } } }
+  const plan = planDeclaration({
+    provider: 'deepseek-official',
+    modelId: 'deepseek-flash',
+    declaration: { preset: 'deepseek' },
+    profile,
+  })
+  const ops = settingsOps('deepseek-official', plan.patch)
+  assert.equal(ops.length, 1)
+  assert.deepEqual(ops[0].path, ['providers', 'deepseek-official', 'modelOverrides', 'deepseek-flash'])
+  assert.equal(ops[0].op, 'set')
+  assert.deepEqual(ops[0].value, plan.patch.modelOverrides['deepseek-flash'])
+})
+
+test('a removal on a catalog route replaces its override entry instead of merging', () => {
+  // `settings.update` merges plain objects, so a stripped entry would leave the
+  // old reasoningEfforts/compat keys behind. A path op replaces the leaf, which
+  // is what "remove the declaration" means.
+  const profile = {
+    modelOverrides: {
+      'deepseek-flash': {
+        reasoningEfforts: { off: null, high: 'high' },
+        compat: { thinkingFormat: 'deepseek' },
+        maxTokens: 1234,
+      },
+    },
+  }
+  const plan = planDeclaration({
+    provider: 'deepseek-official',
+    modelId: 'deepseek-flash',
+    declaration: { remove: true },
+    profile,
+  })
+  const ops = settingsOps('deepseek-official', plan.patch)
+  assert.equal(ops.length, 1)
+  assert.deepEqual(ops[0].path, ['providers', 'deepseek-official', 'modelOverrides', 'deepseek-flash'])
+  assert.deepEqual(ops[0].value, { maxTokens: 1234 }, 'the owned fields are gone, the rest survives')
+})
+
+test('route-level fields become their own ops', () => {
+  const plan = planDeclaration({
+    provider: 'qiyuan',
+    modelId: 'deepseek-v4.1',
+    declaration: { preset: 'deepseek', defaultEffort: 'high', thinkingBudgets: { high: 4096 } },
+    profile: declaredRoute(),
+  })
+  const ops = settingsOps('qiyuan', plan.patch)
+  const byField = Object.fromEntries(ops.map((op) => [op.path.at(-1), op.path]))
+  assert.deepEqual(byField.models, ['providers', 'qiyuan', 'models'])
+  assert.deepEqual(byField.reasoning, ['providers', 'qiyuan', 'reasoning'])
+  assert.deepEqual(byField.thinkingBudgets, ['providers', 'qiyuan', 'thinkingBudgets'])
 })

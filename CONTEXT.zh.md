@@ -12,8 +12,9 @@
 
 ## 1. 这个仓库是什么
 
-一个 **DeepSeek Harness (dsh) 插件**（ESM，MIT，v0.1.0），只解决一件事：让第三方
-OpenAI 兼容路由可以调节思考强度。
+一个 **DeepSeek Harness (dsh) 插件**（ESM，MIT，v0.2.0），只解决一件事：让第三方
+OpenAI 兼容路由可以调节思考强度。当前版本面向 dsh **0.2.1-rc.2**（peer 固定版本、`engines.dsh`、
+`dsh.manifestVersion: 1`）。
 
 第三方 provider 是挂在 `llm-pi-ai` 适配器上的 `providers.<route>` 配置。这条链路从不写
 `reasoningEfforts`，而适配器这样判定模型能力：
@@ -28,8 +29,8 @@ composer 的推理等级选择器消失，强制档位会被 `UNSUPPORTED_REASON
 受支持的 settings 接口补上这份缺失的声明 —— 不做适配器接管、不做 HTTP 拦截、不打 harness 补丁。
 
 四个入口共用同一个 planner：加载时自动补声明的适配（装上即完成全部配置）、`/thinking` 斜杠命令、
-设置页签（设置 → 插件 → **思考强度**）、以及三个可被模型调用的工具。之后还有一次加载时自检，
-会点名所有仍无法调节的路由。
+插件页卡片（侧边栏 **插件** → **dsh-thinking-effort**，经 `plugins.bundle.config` 槽位）、以及三个
+可被模型调用的工具。之后还有一次加载时自检，会点名所有仍无法调节的路由。
 
 ## 2. 建议的阅读顺序
 
@@ -43,17 +44,17 @@ composer 的推理等级选择器消失，强制档位会被 `UNSUPPORTED_REASON
 |---|---|
 | `src/json.ts` | `isPlainObject` / `deepEqual` / `omit`；刻意零依赖 |
 | `src/presets.ts` | **纯数据 + 纯函数**：七个档位、十种 wire 方言、预设表、`validateLevels`，以及两个自动适配常量 |
-| `src/types.ts` | `Declaration`、`ModelLike` / `ProfileLike`、`PiAiPort`，以及 `SettingsLike` 的结构子集 |
-| `src/plan.ts` | **核心**：声明 → settings patch。纯函数，两半共用 |
+| `src/types.ts` | `Declaration`、`ModelLike` / `ProfileLike`、`PiAiPort`、`SettingsPathOp`，以及 `SettingsLike` 的结构子集 |
+| `src/plan.ts` | **核心**：声明 → 路由 patch → 路径寻址的 settings 操作。纯函数，两半共用 |
 | `src/auto.ts` | 未声明的路由该拿哪套预设 —— 自动适配唯一的判断。纯 |
 | `src/diagnose.ts` | 能力报告。纯 |
 | `src/wire.ts` | 复刻 pi-ai 的 dispatch：每档实际发送什么。纯 |
-| `src/apply.ts` | settings 端口：读 descriptor → plan → 带 revision 栅栏的合并写入 |
+| `src/apply.ts` | settings 端口：读 descriptor → plan → 带 revision 栅栏的 `settings.mutate` |
 | `src/commands.ts` | `/thinking` 语法、`explainModel`，以及批量写入循环 `adaptDeclaredModels` |
 | `src/tools.ts` | `thinking_effort_status` / `_set` / `_explain` |
 | `src/format.ts` | 命令、工具与加载时日志共用的文本渲染 |
 | `src/index.ts` | host 入口：`Config`、各项注册、加载时的自动适配与自检 |
-| `src/client/` | 浏览器半边：`index.ts` 挂载、`card.ts` 设置页签、`styles.ts`、`types.ts` |
+| `src/client/` | 浏览器半边：`index.ts` 挂载、`card.ts` 插件页配置卡片、`styles.ts`、`types.ts` |
 
 6. 测试文件与源码同名对应（`plan.ts` → `test/planner.test.mjs` 是唯一例外）：
    `planner`、`auto`、`wire`、`apply`、`diagnose`、`command`、`smoke` —— 其中 `smoke` 跑的是**构建产物**，
@@ -61,21 +62,29 @@ composer 的推理等级选择器消失，强制档位会被 `UNSUPPORTED_REASON
 
 ## 3. 不变量 —— 动手前必须理解
 
-- **只有一个 planner。** 所有判断都在 `src/plan.ts`（纯函数）。Node 半边（`src/apply.ts`）与
-  浏览器半边（`src/client/card.ts`）都调用它，因此命令、工具、GUI 三者永远不可能给出不一致的结果。
-  **不要把这个逻辑复制到第二处。**
+- **只有一个 planner。** 所有判断都在 `src/plan.ts`（纯函数），包括把声明 patch 转成路径操作
+  （`settingsOps`）。Node 半边（`src/apply.ts`）与浏览器半边（`src/client/card.ts`）都调用它、
+  都发送这些操作 —— Node 半边走 `ctx.settings.mutate`，浏览器半边走 `ctx.configForms` ——
+  因此命令、工具、GUI 三者永远不可能给出不一致的结果。**不要把这个逻辑复制到第二处。**
 - **写入形状由路由形态决定** —— `plan.ts` 里最容易搞错的那个分支：
-  - 路由有非空 `models` 列表 → **整表重写**（`mergeLayers` 对数组是整体替换），
+  - 路由有非空 `models` 列表 → **整表重写**（数组整体替换），
     必须把每个条目、每个非本插件拥有的字段原样带过去；
-  - 路由沿用内置目录 → 写一条 `modelOverrides`，字典是合并的，不会收窄所服务的目录。
+  - 路由沿用内置目录 → 只写一条 `modelOverrides.<model>`，并作为独立路径操作写入，
+    字典里其余条目保持原样。
   - 之所以是两种形状：`llm-pi-ai` **拒绝**在同时带 `models` 列表的路由上再写 `modelOverrides`。
-- **写入是合并，且有 revision 栅栏。** `settings.update(ns, { providers: { <route>: patch } }, revision)`
-  只碰一个 route key。冲突会被报告，然后对着新读取重试一次（`apply.ts` 最多两轮）。
+- **写入是路径寻址的，且有 revision 栅栏。** `settings.mutate(ns, settingsOps(provider, patch), revision)`
+  只碰 `providers.<route>`（内置目录路由里只碰一个 model id）。刻意**不用** `settings.update`：
+  它会递归合并对象，于是计划里已经去掉的 `compat.thinkingFormat` 会被旧值保留下来。
+  冲突会被报告，然后对着新读取重试一次（`apply.ts` 最多两轮）。
 - **没什么可写就一个字节都不写。** 已生效的声明返回 `unchanged: true`，写入次数为 0；有测试守着。
 - **插件自身不保存任何声明状态。** `llm-pi-ai` 段是唯一事实来源；一次声明就是对它的一次性编辑，
   绝不是可能与之漂移的影子副本。
-- **命名空间是探测出来的，不是写死的。** 取自 `llm.listConfigurableProviders()[].settingsNs`；
-  `DEFAULT_PI_AI_NS = 'llm-pi-ai'` 只是兜底，因此重命名过 loader 条目的 profile 依然可用。
+- **命名空间按形状发现，不看目录位置。** `listConfigurableProviders()` 按注册顺序返回；0.2.1 里
+  `llm-deepseek` 先于 `llm-pi-ai` 注册，所以"第一个带 `settingsNs` 的条目"会落到一个没有
+  `providers` 字典的配置节上（计划为空、自检假报平安 —— 这确实在真实的 0.2.1 启动里发生过）。
+  应选择 `settingsPath[0] === 'providers'` 或所在配置节确实带 `providers` 字典的条目；
+  `DEFAULT_PI_AI_NS = 'llm-pi-ai'` 是决胜项，因此重命名过 loader 条目的 profile 依然可用。
+  浏览器半边直接绑定内置 id，与 dsh 内置 Models 页做法一致。
 - **`off: null` 与「没有声明 off」含义相反。** `off: null` 是「支持该档位，但 dispatch 什么都不发」；
   完全没有 `off` 是「不提供该档位」。只有 `off` 允许留空。`src/wire.ts` 的 `thinkingLevelMapOf`
   精确复刻了这一点。
@@ -87,8 +96,8 @@ composer 的推理等级选择器消失，强制档位会被 `UNSUPPORTED_REASON
   也必须是它，绝不能是任何厂商专用预设。`test/wire.test.mjs` 用 `THE REGRESSION` 与
   "the first recommendation is the one that cannot fail loudly" 两个测试守着这两条。
 - **刻意的非目标**（见 README 同名章节；这些不是待修的 bug）：
-  - 不做路由级移除 —— `remove` 只剥本插件拥有的 `reasoningEfforts` 与 `compat.thinkingFormat`，
-    不动 `reasoning` / `thinkingBudgets`，因为 `update` 是合并，而 JSON 没有 `undefined` 可以合并进去；
+  - 不做路由级移除 —— `remove` 只剥本插件拥有的、模型条目里的 `reasoningEfforts` 与
+    `compat.thinkingFormat`，不动路由级的 `reasoning` / `thinkingBudgets`：声明从未拥有它们；
   - 不做 HTTP 层改写 —— 没有受支持的拦截点，改冻结的 call config 会抛异常；
   - 不探测端点 —— 自动适配只依据配置里已有的事实（路由的 `compat`、`baseURL`，以及适配器给出的
     「自声明 vs 内置目录」判断）；它不会拿你的 API Key 去发测试请求，何况单次请求也分不清
@@ -104,6 +113,10 @@ composer 的推理等级选择器消失，强制档位会被 `UNSUPPORTED_REASON
 - **加载时自检必须跑在自动适配之后，不能与之并行。** 适配过程过了第一个 `await` 就没有同步代码了，
   并行发出的报告会在写入落地**之前**读 settings 文档，于是在"已声明 1 个模型"的上一行打印
   "1 个模型无法调节"这类自相矛盾的话。`test/smoke.test.mjs` 同时断言了写入发生与这句话不出现。
+- **适配流程必须真的等待。** pi-ai 适配器在 settings 服务挂载之后才注册自己的 settings descriptor，
+  所以第一次查看找不到它是正常的。每次重试之间要 sleep（`AUTO_ADAPT_DELAY_MS`）；如果写成瞬时
+  `continue`，五次重试会落在同一瞬间、在适配器出现前就放弃，新接入的 Key 得不到声明 ——
+  这一点在真实的 0.2.1 启动中观察到，并已由冒烟测试钉住。
 
 ## 4. 值得知道的文档缺口
 
@@ -128,6 +141,19 @@ composer 的推理等级选择器消失，强制档位会被 `UNSUPPORTED_REASON
   `auto.ts` 回答"到底该存在哪份声明"。分开才能让后者不需要 settings 服务就能测，
   也才能让前者不含任何"用户应该选哪个预设"的意见。
 
+dsh 0.2.1 的适配一次踩出了第三个例子，而且横跨三个表面：
+
+- 客户端 API 在插件脚下换了：`settingsScope` 在 0.2.0 之前就消失了，由 `ctx.configForms` 取代；
+  第三方 bundle 自己的配置位置也从 `settings.plugins.tab`（内置插件清单）搬到了侧边栏插件页的
+  `plugins.bundle.config`；
+- `llm.listConfigurableProviders()` 开始把 `llm-deepseek` 排在 `llm-pi-ai` 前面，于是
+  "第一个 `settingsNs`" 的发现方式静默失效（计划为空、自检假报平安），只有真实 0.2.1 启动才暴露；
+- 空描述符重试循环从不 sleep，所谓"五次半秒等待"其实是瞬间的五次尝试。
+
+这些在适配之前 `pnpm test` 全都看不见。教训与上面相同、只是放大了一层：dsh 的次版本/主版本升级
+可能换掉一个**接缝**而本地单测全绿，所以在相信任何兼容性声明之前，请检查已安装运行时自己的
+manifest/README，并做一次无头启动。
+
 ## 5. 实测基线
 
 在 Windows 上，非 TTY 的 `pnpm` 运行会先做一次依赖校验，试图清空 `node_modules`，并以
@@ -142,11 +168,19 @@ $pnpm = "$runtime\pnpm\bin\pnpm.mjs"
 & $node $pnpm verify      # typecheck -> build -> test
 ```
 
-在 `main`（`6d46946`，工作树干净）上的实测结果：`tsc --noEmit` 无输出；tsdown 产出
-`lib/index.js` + `lib/index.d.ts` + `lib/client.js`（含 sourcemap）；`node --test` → **64 pass / 0 fail**。
+在 0.2.1-rc.2 适配后的工作树上实测（2026-10-17）：`tsc --noEmit` 对着 0.2.1-rc.2 的声明无输出；
+tsdown 产出 `lib/index.js` + `lib/index.d.ts` + `lib/client.js`（含 sourcemap）；
+`node --test` → **91 pass / 0 fail**。相对 0.2.0-rc.2 基线（82）的增量来自
+`test/planner.test.mjs` 的 `settingsOps`/路径操作用例、`test/apply.test.mjs` 的
+`settings.mutate` 重写、`smoke.test.mjs` 的命名空间发现与重试等待用例，以及 0.2.1 客户端契约断言。
 
-加入自动适配之后再次实测（工作树，`pnpm verify`）：类型检查无输出、两个 bundle 均产出、
-**82 pass / 0 fail**。增量来自 `test/auto.test.mjs`，以及 `smoke.test.mjs` 里七个加载时/`adapt` 用例。
+除测试套件外，适配还对着**已安装的 0.2.1-rc.2 运行时**验证过：把它的 `app.asar` 解到临时目录，
+用隔离的 `DSH_HOME` 和一个装着本 bundle 的 profile 跑它的 CLI，然后检查：(a) `--dump-config`
+列出 `thinking-effort` 行与测试路由；(b) 无头启动退出码 0、无被跳过的 bundle、Loader 行 active；
+(c) `/thinking` 与三个工具注册在真实的 0.2.1 服务上；(d) 加载时适配确实写入声明且日志无矛盾；
+(e) 客户端 module graph 带着 `dsh-thinking-effort` 的 `client.js` 与 `__ModuleLoader__` 握手。
+那次运行 PASS、0 advisory，正是它发现了上面第 4 节列的三个 0.2.1 接缝。今后任何 harness 版本
+升级都要重跑；单靠测试套件抓不到接缝变化。
 
 读这份输出时有两个坑：
 
@@ -184,12 +218,21 @@ window.__ModuleLoader__.load({ id: "dsh-thinking-effort", factory: (require) => 
 **tsdown 配置是数组。** host 那段用 `clean: true`，client 那段必须保持 `clean: false`，
 否则两段构建会互相删除产物。
 
+**`dsh.client.inject` 只是信息性的。** 0.2.1 里它列的是 boot graph 的包名依赖边，不是 Cordis
+服务；服务注入靠客户端 bundle 自己的 `export const inject`。旧的 `["slots"]` 不指向任何包行，
+是静默无效的。
+
 **React 卡片里的两条隐形规则**（`src/client/card.ts` 两处都写了原因）：
 
 1. 所有 hook 必须在任何 early return **之前**执行 —— 命名空间会从 `loading` 走到 `ready`
    并重新渲染，而写在 return 之后的 hook 会改变 hook 数量，在这个 slot 里会直接崩掉卡片；
-2. `settingsScope.set(field, value)` 只寻址**顶层**字段并**整体替换**，所以卡片必须自己从
-   snapshot 里读出已存的用户层、只合并单个 route、再写回 —— 绝不能直接 `set('providers', …)`。
+2. 所有写入都走 `form.mutate` 路径操作：`[{ op: 'set', path: ['providers', <route>, …], value }]`，
+   内置目录路由的 `modelOverrides` 里则每个 model id 一条。`set('providers', …)` 会整体替换
+   顶层字段，绝不能直接用。form 来自 `ctx.configForms.get('llm-pi-ai')`（entry id = Host
+   loader 条目 id）；注册进 `plugins.bundle.config` 时以 npm 包名为 key，并包在
+   `ctx.effect(() => forms.whileServed(['llm-pi-ai'], …))` 里；`configForms` 用
+   `ctx.inject` 请求，绝不写进 bundle 的静态 `inject` —— 一个 pending 的客户端 fiber 会导致
+   web shell 启动审计失败。
 
 另外卡片用的是 `React.createElement` 而不是 JSX，尽管 `jsx: react-jsx` 是开着的。
 
@@ -205,10 +248,11 @@ window.__ModuleLoader__.load({ id: "dsh-thinking-effort", factory: (require) => 
 `test/dsh-tools-stub.mjs`，因为 `defineTool` 在运行时是恒等函数，真正的契约在类型层（而
 `pnpm typecheck` 仍会对着 devDependency 里的真实签名做编译）。
 
-这意味着**这里完全没有覆盖真实的 harness 集成**。要真刀真枪验证，需要把插件装进一个 profile ——
-`dsh plugin --profile <profile> add <path>`，然后重启 `dsh`（bundle 成员关系只在启动时读取），
-再用 `dsh --profile <profile> --dump-config` 确认那一行确实出现了。在 Windows 桌面版上，
-`desktop` profile 被运行中的应用占用并加锁：**装进去之前必须先退出 DeepSeek Harness。**
+这意味着测试套件**没有覆盖真实的 harness 集成**。要真刀真枪验证，要么走第 5 节的无头运行时流程，
+要么把插件装进一个 profile —— `dsh plugin --profile <profile> add <path>`，然后重启 `dsh`
+（bundle 成员关系只在启动时读取），再用 `dsh --profile <profile> --dump-config` 确认那一行确实出现了。
+在 Windows 桌面版上，`desktop` profile 被运行中的应用占用并加锁：**装进去之前必须先退出
+DeepSeek Harness。**
 
 ## 8. 约定
 

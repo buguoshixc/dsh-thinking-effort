@@ -169,8 +169,8 @@ export function parseCommand(rawInput: string): Parsed {
  * know whether the adapter was mounted at all, and a second read could disagree
  * with the first.
  *
- * Writes are serial, not concurrent: `settings.update` is revision-fenced, and
- * two overlapping merges into the same section would make one of them lose the
+ * Writes are serial, not concurrent: every write is revision-fenced, and two
+ * overlapping mutations of the same section would make one of them lose the
  * revision race for no gain.
  *
  * @param port - the settings port.

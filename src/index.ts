@@ -24,19 +24,20 @@
  * through the supported settings seam — no adapter takeover, no HTTP
  * interception, no harness patch:
  *
- * - `settings.update(ns, { providers: { <route>: … } })` merges one route key,
- *   so every other route and every unowned field survives;
- * - a route with a `models` list is rewritten in full (the array replaces, so
- *   its entries must be carried through); a route inheriting the installed
- *   catalog is edited through `modelOverrides`, which merges;
+ * - `settings.mutate(ns, settingsOps(…), revision)` writes one route through
+ *   path ops, so every other route and every unowned field survives;
+ * - a route with a `models` list is rewritten in full (arrays replace, so its
+ *   entries must be carried through); a route inheriting the installed catalog
+ *   is edited through one `modelOverrides.<model>` path;
  * - the write is revision-fenced against the descriptor read in the same pass.
  *
  * The settings entry id is read from the adapter's own configurable-provider
- * directory rather than hardcoded, so a profile that renames the loader entry
- * still works.
+ * directory (by shape, not by registration order) rather than hardcoded, so a
+ * profile that renames the loader entry still works.
  *
  * Entry points: the `/thinking` slash command, the `thinking_effort_status` /
- * `thinking_effort_set` tools, a load-time diagnostic, and the browser card.
+ * `thinking_effort_set` tools, a load-time diagnostic, and the Plugins-page
+ * browser card.
  *
  * @module dsh-thinking-effort
  */
@@ -46,6 +47,7 @@ import Schema from '@deepseek-ai/schemastery'
 import { adaptDeclaredModels, capabilityReport, registerThinkingCommand } from './commands.ts'
 import { analyzeRoutes, unadjustable } from './diagnose.ts'
 import { renderAdapt } from './format.ts'
+import { isPlainObject } from './json.ts'
 import { AUTO_FALLBACK_PRESET, DEFAULT_PRESET, presetOrDefault } from './presets.ts'
 import { piAiDescriptor } from './apply.ts'
 import { registerThinkingTools } from './tools.ts'
@@ -100,7 +102,13 @@ export const Config: Schema<PluginConfig> = Schema.object({
 
 /** The slice of the adapter directory this plugin reads. */
 interface LlmDirectoryLike {
-  listConfigurableProviders?: () => Array<{ provider: string, settingsNs?: string, declared?: boolean }>
+  listConfigurableProviders?: () => Array<{
+    provider: string
+    settingsNs?: string
+    /** Path from the namespace section root to this route's profile; pi-ai uses `['providers', route]`. */
+    settingsPath?: readonly string[]
+    declared?: boolean
+  }>
 }
 
 /** A logger, as far as this plugin uses one. */
@@ -169,17 +177,46 @@ export function apply(ctx: Context, config: PluginConfig): void {
   }
 
   /**
-   * The settings entry id owning the pi-ai routes: taken from the adapter's own
-   * directory so a renamed loader entry still resolves, falling back to the
-   * shipped id.
+   * The settings entry id owning the pi-ai routes.
+   *
+   * 0.2.1 lists configurable providers in registration order, and the DeepSeek
+   * account adapter registers before the pi-ai adapter. "The first entry with a
+   * settings namespace" therefore resolves to `llm-deepseek`, a section with no
+   * `providers` dict: every plan comes back empty and the report claims every
+   * model is adjustable. Judge by shape instead — the adapter whose directory
+   * path is `['providers', …]`, or whose section value really carries a
+   * `providers` object. The shipped id is the tie-break, so a profile that
+   * renames the loader entry still resolves.
    */
   const piAiNs = (): string => {
+    const descriptors = (() => {
+      const settings = settingsOf()
+      if (settings === undefined) return []
+      try {
+        return settings.describe({ redactSecrets: true })
+      } catch {
+        return []
+      }
+    })()
+    /** Whether one settings section resolves to an object with a `providers` dict. */
+    const sectionHasProviders = (ns: string): boolean => {
+      const row = descriptors.find((candidate) => candidate.ns === ns)
+      return row !== undefined && isPlainObject(row.value)
+        && isPlainObject((row.value as { providers?: unknown }).providers)
+    }
+    if (descriptors.length === 0) return DEFAULT_PI_AI_NS
+    if (sectionHasProviders(DEFAULT_PI_AI_NS)) return DEFAULT_PI_AI_NS
     const llm = ctx.get('llm') as unknown as LlmDirectoryLike | undefined
     if (typeof llm?.listConfigurableProviders === 'function') {
       try {
-        const entry = llm.listConfigurableProviders()
-          .find((candidate) => typeof candidate.settingsNs === 'string' && candidate.settingsNs.length > 0)
-        if (entry?.settingsNs !== undefined) return entry.settingsNs
+        const entries = llm.listConfigurableProviders().filter(
+          (entry): entry is { provider: string, settingsNs: string, settingsPath?: readonly string[], declared?: boolean } =>
+            typeof entry.settingsNs === 'string' && entry.settingsNs.length > 0,
+        )
+        const owning = entries.find((entry) =>
+          entry.settingsPath?.[0] === 'providers' && sectionHasProviders(entry.settingsNs))
+          ?? entries.find((entry) => sectionHasProviders(entry.settingsNs))
+        if (owning !== undefined) return owning.settingsNs
       } catch {
         // Fall through to the shipped id.
       }
@@ -222,7 +259,15 @@ export function apply(ctx: Context, config: PluginConfig): void {
       try {
         const port = portOf()
         const descriptor = piAiDescriptor(port)
-        if (descriptor === undefined) continue
+        if (descriptor === undefined) {
+          // The adapter registers its directory entries and settings descriptor
+          // after the settings service mounts, so "not there yet" is the normal
+          // first look. Waiting is the point of the retry loop; without the
+          // sleep every attempt would land in the same instant and the pass
+          // would give up before the adapter had a chance to register.
+          await sleep(AUTO_ADAPT_DELAY_MS)
+          continue
+        }
         const result = await adaptDeclaredModels(
           port, descriptor, declaredRoutes(), undefined, preferredPreset(),
         )

@@ -5,7 +5,7 @@
 在 [DeepSeek Harness](https://github.com/deepseek-ai/dsh) 里，让**第三方 API Key** 重新拥有
 **思考强度**（推理等级 / reasoning effort）调节能力。
 
-你接入一个 OpenAI 兼容中转站，选中它的模型，输入框上方的「推理等级」面板却直接消失了。本插件为这些路由补上缺失的能力声明，把选择器找回来——用斜杠命令、用设置页，或者直接让模型自己修。
+你接入一个 OpenAI 兼容中转站，选中它的模型，输入框上方的「推理等级」面板却直接消失了。本插件为这些路由补上缺失的能力声明，把选择器找回来——用斜杠命令、用插件页，或者直接让模型自己修。
 
 ---
 
@@ -59,13 +59,13 @@ providers:
           thinkingFormat: deepseek
 ```
 
-三个入口共用同一份经过单元测试的规划逻辑：
+四个入口共用同一份经过单元测试的规划逻辑：
 
 | 入口 | 用法 |
 |---|---|
 | 自动适配 | **装上就生效**：启动时给每条还没有档位声明的第三方路由自动写入声明，无需任何命令 |
 | 斜杠命令 | `/thinking` · `/thinking presets` · `/thinking adapt` · `/thinking set <provider>/<model> <preset>` · `/thinking remove …` |
-| 设置页 | 设置 → 插件 → **思考强度**，逐模型下拉选择，即时生效 |
+| 插件页 | 侧边栏 **插件** → **dsh-thinking-effort** → 逐模型下拉选择，即时生效 |
 | 模型工具 | `thinking_effort_status` / `thinking_effort_set`，于是「这个模型调不了思考强度」可以一句话修好 |
 
 启动时还会做一次自检，把仍然无法调节的路由直接写进日志——新接入的 Key 会立刻被注意到，而不是等你打开模型选择器才发现。
@@ -96,6 +96,16 @@ dsh --profile <profile> --dump-config    # 应能看到名为 dsh-thinking-effor
 ```
 
 > Windows 桌面版的 `desktop` profile 被运行中的应用独占并加了文件锁：**装进它之前请先完全退出 DeepSeek Harness。**
+
+### 兼容性
+
+面向 dsh **0.2.1-rc.2** 构建。peer 依赖固定在该版本，`engines.dsh` 声明 `>=0.2.1-rc.2 <0.3.0`，
+`dsh.manifestVersion` 记录 0.2.1 的包清单格式。
+
+集成点也都是 0.2.1 的：host 写入走 `ctx.settings.mutate`（路径操作），浏览器卡片走设置域的
+`ctx.configForms` 服务，第三方 bundle 自己的配置页注册在侧边栏**插件**页的
+`plugins.bundle.config` 槽位上。dsh 已经没有旧版的客户端 `settingsScope` 绑定器，因此
+0.2.1 之前的版本不受支持。
 
 ## 使用
 
@@ -185,22 +195,45 @@ dsh --profile <profile> --dump-config    # 应能看到名为 dsh-thinking-effor
 
 ## 工作原理
 
-`settings.update(条目id, { providers: { <route>: … } })` 是**合并**语义，因此只给一个路由键，其余路由、以及该路由下不属于本插件的字段都原封不动。补丁的形状取决于路由的能力来自哪里——因为 `mergeLayers` 对数组是整体替换，而 `llm-pi-ai` 拒绝在同时带有 `models` 列表的路由上使用 `modelOverrides`：
+写入是**路径寻址的 settings 变更**：`settings.mutate(条目id, settingsOps(provider, patch), revision)`。
+每个操作只指定一条路径——`providers.<route>.models`、`providers.<route>.modelOverrides.<model>`、
+`providers.<route>.reasoning`——因此只影响被编辑的那条路由（在内置目录路由里只影响被编辑的那个模型），
+兄弟路由和本插件不拥有的字段无需"读-改-写"就能原封不动。浏览器卡片通过 `ctx.configForms` 发送同一组
+操作，所以命令、工具和 GUI 不可能写出不同的文档。
 
-- 带非空 `models` 列表的路由（所有自声明的第三方路由）→ **整体重写该列表**，每一项、每一个不属于本插件的字段都原样带过；
-- 沿用内置目录的路由 → 写 `modelOverrides` 条目；它是字典，合并，且不会收窄实际服务的目录。
+补丁的形状取决于路由的能力来自哪里——因为 `llm-pi-ai` 拒绝在同时带有 `models` 列表的路由上使用
+`modelOverrides`：
 
-看 diff 之前有件事值得先知道。被重写的 `models` 数组是从**解析后**的配置构造的，因此解析器已经填好的 schema 默认值会一起落进存储文档——在自声明路由上声明档位后，那个模型条目通常会在本插件真正写入的 `thinkingFormat` 旁边多出 `compat.chatTemplateKwargs: {}` 和 `compat.chatTemplateArgs: {}`。它们就是 schema 自己的默认值，解析结果没有任何变化、行为也没有任何不同，只是文档对原本隐式的字段变得更显式。写入在路由层面仍然是窄的：用户层里只出现你指名的那条路由，也不会写入任何路由级默认值。
+- 带非空 `models` 列表的路由（所有自声明的第三方路由）→ **整体重写该列表**，每一项、每一个不属于
+  本插件的字段都原样带过；
+- 沿用内置目录的路由 → 只写一个 `modelOverrides.<model>` 条目，并作为独立的路径操作写入，字典里其余
+  条目保持原样。
 
-写入用同一次读取拿到的 revision 做乐观并发围栏（检测到并发编辑会报出并重试一次），而已经生效的声明则完全不写。自动适配因此是幂等的：第一次启动写进去，之后每次启动都是零写入的空转——它不需要记住自己写过什么，已生效的声明本身就让它无事可做。
+看 diff 之前有件事值得先知道。被重写的 `models` 数组是从**解析后**的配置构造的，因此解析器已经填好的
+schema 默认值会一起落进存储文档——在自声明路由上声明档位后，那个模型条目通常会在本插件真正写入的
+`thinkingFormat` 旁边多出 `compat.chatTemplateKwargs: {}` 和 `compat.chatTemplateArgs: {}`。它们就是
+schema 自己的默认值，解析结果没有任何变化、行为也没有任何不同，只是文档对原本隐式的字段变得更显式。
+写入在路由层面仍然是窄的：用户层里只出现你指名的那条路由，也不会写入任何路由级默认值。
 
-自动适配与启动自检在同一个注入点按顺序执行，**先适配、后自检**：这样日志里的"所有模型都可调节"描述的是刚刚落地的状态，而不是一个即将成立的状态。settings 服务可能先于 pi-ai 适配器注册好，所以适配失败时会以半秒间隔重试至多五次，之后才放弃并提示手动运行 `/thinking adapt`。
+写入用同一次读取拿到的 revision 做乐观并发围栏（检测到并发编辑会报出并重试一次），而已经生效的声明则
+完全不写。自动适配因此是幂等的：第一次启动写进去，之后每次启动都是零写入的空转——它不需要记住自己写过
+什么，已生效的声明本身就让它无事可做。
 
-设置条目 id 取自适配器自己的可配置 provider 目录（`listConfigurableProviders().settingsNs`），所以即使 profile 重命名了 loader 条目也仍然可用；`llm-pi-ai` 只是兜底值。
+自动适配与启动自检在同一个注入点按顺序执行，**先适配、后自检**：这样日志里的"所有模型都可调节"描述的是
+刚刚落地的状态，而不是一个即将成立的状态。settings 服务可能先于 pi-ai 适配器注册好，所以找不到描述符时
+会等待半秒再重试，至多五次，之后才放弃并提示手动运行 `/thinking adapt`。
+
+设置条目 id 按**形状**发现，而不是按目录位置：`listConfigurableProviders()` 按注册顺序返回，而在 0.2.1
+里 `llm-deepseek` 适配器先于 `llm-pi-ai` 注册，所以"第一个命名空间"会落到一个没有 `providers` 字典的
+配置节上。插件选择 settings 路径为 `['providers', …]`（或该节确实带有 `providers` 字典）的条目，以内置
+的 `llm-pi-ai` 作为决胜；这样即使 profile 重命名了 loader 条目也仍然可用。（浏览器卡片直接绑定内置 id，
+与 dsh 内置的 Models 页做法一致。）
 
 ## 它刻意不做的事
 
-- **不动路由级字段的移除。** `remove` 只剥掉 `reasoningEfforts` 和本插件写过的 `thinkingFormat`，不碰 `reasoning` / `thinkingBudgets`：`update` 是合并，JSON 里没有 `undefined` 可以合并进去，而要 unset 不属于自己的字段就得对别人的配置做路径操作。
+- **不动路由级字段的移除。** `remove` 只剥掉本插件拥有的模型条目里的 `reasoningEfforts` 和
+  `compat.thinkingFormat`，不碰路由级的 `reasoning` / `thinkingBudgets`：声明从未拥有它们，移除档位表
+  不应该顺带改掉路由默认值。
 - **不重写 HTTP 层。** 请求体没有受支持的拦截点，而调用配置是深冻结的，改它直接抛异常。声明能力才是受支持的路径。
 - **不主动探测端点。** 自动适配只在配置已有的证据上做保守判断，既不会拿你的 Key 去发测试请求，也不会通过"看哪档有反应"来反推方言——单次请求分不清"参数被忽略"和"参数生效"，那个结论得由你在会话里得出。改档位名是一次 `/thinking set`。
 
@@ -222,19 +255,19 @@ pnpm verify        # 以上三步
 src/
   index.ts        host 入口：Config、各注册、启动自动适配与自检
   presets.ts      思考档位、线协议方言、校验器（纯函数）
-  plan.ts         声明 → 设置补丁（纯函数，浏览器半边共用）
+  plan.ts         声明 → 路径寻址的 settings 操作（纯函数，浏览器半边共用）
   auto.ts         自动适配的选档规划（纯函数：哪条路由该拿哪套档位）
   diagnose.ts     能力报告（纯函数）
   wire.ts         每一档实际会往请求里发什么（纯函数）
   types.ts        存取形状、settings 端口、方言常量
   json.ts         isPlainObject / deepEqual / omit（零依赖）
-  apply.ts        settings 端口：读描述符、规划、合并写入
+  apply.ts        settings 端口：读描述符、规划、按路径写入
   commands.ts     /thinking（含 adapt 批量入口）
   tools.ts        thinking_effort_status / thinking_effort_set / thinking_effort_explain
   format.ts       共用文本渲染
   client/
     index.ts      浏览器半边入口：inject / apply
-    card.ts       设置页签
+    card.ts       插件页上的配置卡片
     styles.ts     样式表
     types.ts      所涉两个浏览器服务的结构类型
 test/             单元测试 + 针对构建产物的冒烟测试

@@ -9,19 +9,19 @@
  *
  * Pure by construction: no cordis, no settings, no I/O. The Node half applies
  * the result through `ctx.settings`; the browser half applies the same result
- * through `settingsScope`; `test/plan.test.mjs` pins the behaviour of both.
+ * through `ctx.configForms`; `test/planner.test.mjs` pins the behaviour of both.
  *
  * ## Why the write takes one of two shapes
  *
- * `mergeLayers` merges plain objects recursively but replaces arrays wholesale,
- * and `llm-pi-ai` refuses `modelOverrides` on a route that also carries a
- * `models` list. So:
+ * `llm-pi-ai` stores routes as a `providers` dict, and its `models` array is
+ * replaced wholesale while `modelOverrides` is a dict. So:
  *
  * - a route with a non-empty `models` list (every hand-declared third-party
  *   route) is edited by rewriting that list in full, preserving every entry and
  *   every field this plugin does not own;
  * - a route that inherits the installed catalog is edited through
- *   `modelOverrides`, a dict — which merges, so nothing else is touched.
+ *   `modelOverrides`, a dict — one model id at a time, without narrowing the
+ *   rest of the dict.
  *
  * @module dsh-thinking-effort/plan
  */
@@ -34,7 +34,7 @@ import {
   type LevelMap,
   type LevelWire,
 } from './presets.ts'
-import type { Declaration, ModelLike, ProfileLike } from './types.ts'
+import type { Declaration, ModelLike, ProfileLike, SettingsPathOp } from './types.ts'
 
 /** Model fields a declaration owns; a removal strips exactly these. */
 const OWNED_MODEL_FIELDS = ['reasoningEfforts'] as const
@@ -57,6 +57,38 @@ export interface PlanResult {
   patch: Record<string, unknown>
   /** The resolved profile already carries exactly this declaration. */
   unchanged: boolean
+}
+
+/**
+ * Turn a plan patch into path ops that touch exactly one route.
+ *
+ * Path ops land on the user layer and replace the value at their own leaf, so
+ * sibling routes and unowned fields survive without a read-modify-write. The
+ * one decomposition that matters is `modelOverrides`: setting the whole dict
+ * would drop overrides for models this edit does not touch, so each model id
+ * gets its own op.
+ *
+ * This is deliberately *not* `settings.update`: that merges objects
+ * recursively, so rewriting a catalog route's override entry would keep a
+ * stale `reasoningEfforts` or `compat.thinkingFormat` the plan dropped.
+ *
+ * @param provider - provider route key.
+ * @param patch - the `providers.<provider>` partial from {@link planDeclaration}.
+ * @returns ordered path ops, never empty for a non-empty patch.
+ */
+export function settingsOps(provider: string, patch: Record<string, unknown>): SettingsPathOp[] {
+  const base = ['providers', provider]
+  const ops: SettingsPathOp[] = []
+  for (const [field, value] of Object.entries(patch)) {
+    if (field === 'modelOverrides' && isPlainObject(value)) {
+      for (const [modelId, entry] of Object.entries(value)) {
+        ops.push({ op: 'set', path: [...base, 'modelOverrides', modelId], value: entry })
+      }
+      continue
+    }
+    ops.push({ op: 'set', path: [...base, field], value })
+  }
+  return ops
 }
 
 /** The input of {@link planDeclaration}. */
