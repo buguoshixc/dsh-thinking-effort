@@ -6,3 +6,12 @@ packages:
 
 nodeLinker: hoisted
 autoInstallPeers: false
+
+# pnpm 11 turned on supply-chain protection by default: it refuses any version
+# published less than a day ago. This plugin pins exact dsh rc versions and has
+# to install them the day they ship, so the `@deepseek-ai/*` scope is exempt while
+# every other dependency keeps the one-day gate. Without this, CI's frozen install
+# fails on every dsh rc bump with ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION (first hit
+# on the 0.2.1-rc.2 port, 2026-10-17, packages ~7 hours old at push time).
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/*'

@@ -218,6 +218,16 @@ Two traps when reading that output:
 
 CI (`.github/workflows/ci.yml`) runs the same three steps on Node 24 with pnpm 11.7.0.
 
+**pnpm 11 refuses releases younger than a day.** `minimumReleaseAge` defaults to `1440`
+minutes, and the frozen-install verification pass re-applies it to every lockfile entry, so
+pinning a dsh rc in `package.json` and pushing within 24 hours of its publication makes
+`pnpm install --frozen-lockfile` fail with `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` — this
+took down CI run #6 on the 0.2.1-rc.2 port (the 11 `@deepseek-ai/*@0.2.1-rc.2` packages were
+~7 hours old). `pnpm-workspace.yaml` therefore exempts `@deepseek-ai/*` via
+`minimumReleaseAgeExclude`; the rest of the graph keeps the one-day gate. If a future release
+publishes outside that scope and CI fails the same way, this is the setting to extend — not a
+reason to set `minimumReleaseAge: 0` globally.
+
 ## 6. Constraints you must respect
 
 **TypeScript.** `tsconfig.json` is `strict` + `noUncheckedIndexedAccess` (array reads must be
