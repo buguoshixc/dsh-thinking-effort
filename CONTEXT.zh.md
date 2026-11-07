@@ -12,8 +12,8 @@
 
 ## 1. 这个仓库是什么
 
-一个 **DeepSeek Harness (dsh) 插件**（ESM，MIT，v0.2.0），只解决一件事：让第三方
-OpenAI 兼容路由可以调节思考强度。当前版本面向 dsh **0.2.1-rc.2**（peer 固定版本、`engines.dsh`、
+一个 **DeepSeek Harness (dsh) 插件**（ESM，MIT，v0.2.2），只解决一件事：让第三方
+OpenAI 兼容路由可以调节思考强度。当前版本面向 dsh **0.2.2-rc.1**（peer 固定版本、`engines.dsh`、
 `dsh.manifestVersion: 1`）。
 
 第三方 provider 是挂在 `llm-pi-ai` 适配器上的 `providers.<route>` 配置。这条链路从不写
@@ -168,7 +168,7 @@ $pnpm = "$runtime\pnpm\bin\pnpm.mjs"
 & $node $pnpm verify      # typecheck -> build -> test
 ```
 
-在 0.2.1-rc.2 适配后的工作树上实测（2026-10-17）：`tsc --noEmit` 对着 0.2.1-rc.2 的声明无输出；
+在 0.2.2-rc.1 适配后的工作树上实测（2026-11-07）：`tsc --noEmit` 对着 0.2.2-rc.1 的声明无输出；
 tsdown 产出 `lib/index.js` + `lib/index.d.ts` + `lib/client.js`（含 sourcemap）；
 `node --test` → **91 pass / 0 fail**。相对 0.2.0-rc.2 基线（82）的增量来自
 `test/planner.test.mjs` 的 `settingsOps`/路径操作用例、`test/apply.test.mjs` 的

@@ -116,10 +116,10 @@ dsh --profile <profile> --dump-config    # expect a row named dsh-thinking-effor
 
 ### Compatibility
 
-Built for dsh **0.2.1-rc.2**. The peer dependencies pin that release, `engines.dsh` declares
+Built for dsh **0.2.2-rc.1**. The peer dependencies pin that release, `engines.dsh` declares
 `>=0.2.1-rc.2 <0.3.0`, and `dsh.manifestVersion` records the 0.2.1 package-manifest format.
 
-The integration points are the 0.2.1 ones: host writes go through `ctx.settings.mutate` (path ops),
+The integration points are the 0.2.2 ones: host writes go through `ctx.settings.mutate` (path ops),
 the browser card through the settings domain's `ctx.configForms` service, and a third-party
 bundle's own configuration page registers in the `plugins.bundle.config` slot of the sidebar
 **Plugins** page. The pre-0.2 client binder (`settingsScope`) no longer exists in dsh, so versions

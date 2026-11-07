@@ -99,10 +99,10 @@ dsh --profile <profile> --dump-config    # 应能看到名为 dsh-thinking-effor
 
 ### 兼容性
 
-面向 dsh **0.2.1-rc.2** 构建。peer 依赖固定在该版本，`engines.dsh` 声明 `>=0.2.1-rc.2 <0.3.0`，
+面向 dsh **0.2.2-rc.1** 构建。peer 依赖固定在该版本，`engines.dsh` 声明 `>=0.2.1-rc.2 <0.3.0`，
 `dsh.manifestVersion` 记录 0.2.1 的包清单格式。
 
-集成点也都是 0.2.1 的：host 写入走 `ctx.settings.mutate`（路径操作），浏览器卡片走设置域的
+集成点也都是 0.2.2 的：host 写入走 `ctx.settings.mutate`（路径操作），浏览器卡片走设置域的
 `ctx.configForms` 服务，第三方 bundle 自己的配置页注册在侧边栏**插件**页的
 `plugins.bundle.config` 槽位上。dsh 已经没有旧版的客户端 `settingsScope` 绑定器，因此
 0.2.1 之前的版本不受支持。

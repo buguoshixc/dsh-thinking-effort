@@ -13,9 +13,9 @@ Read the README first, then this.
 
 ## 1. What this repository is
 
-A **DeepSeek Harness (dsh) plugin** (ESM, MIT, v0.2.0) with exactly one job: give a third-party
+A **DeepSeek Harness (dsh) plugin** (ESM, MIT, v0.2.2) with exactly one job: give a third-party
 OpenAI-compatible route adjustable thinking intensity. The current release targets dsh
-**0.2.1-rc.2** (peer pins, `engines.dsh`, `dsh.manifestVersion: 1`).
+**0.2.2-rc.1** (peer pins, `engines.dsh`, `dsh.manifestVersion: 1`).
 
 A third-party provider is a `providers.<route>` profile on the `llm-pi-ai` adapter. Nothing in that
 flow writes `reasoningEfforts`, and the adapter decides a model's capability like this:
@@ -191,14 +191,14 @@ $pnpm = "$runtime\pnpm\bin\pnpm.mjs"
 & $node $pnpm verify      # typecheck -> build -> test
 ```
 
-Measured on the 0.2.1-rc.2 port (working tree, 2026-10-17): `tsc --noEmit` clean against the
-0.2.1-rc.2 declarations; tsdown emits `lib/index.js` + `lib/index.d.ts` + `lib/client.js`
+Measured on the 0.2.2-rc.1 port (working tree, 2026-11-07): `tsc --noEmit` clean against the
+0.2.2-rc.1 declarations; tsdown emits `lib/index.js` + `lib/index.d.ts` + `lib/client.js`
 (+ sourcemap); `node --test` → **91 pass / 0 fail**. The delta from the 0.2.0-rc.2 baseline (82)
 is `settingsOps`/path-op cases in `test/planner.test.mjs`, the `settings.mutate` rewrite of
 `test/apply.test.mjs`, namespace-discovery and retry-wait cases in `smoke.test.mjs`, and the 0.2.1
 client-contract assertions.
 
-Beyond the suite, the port was verified against the **installed 0.2.1-rc.2 runtime**: extract its
+Beyond the suite, the 0.2.1-rc.2 port was verified against the **installed 0.2.1-rc.2 runtime**: extract its
 `app.asar` into a scratch directory, run its CLI with an isolated `DSH_HOME` and a profile carrying
 this bundle, then check (a) `--dump-config` lists the `thinking-effort` row and the test route,
 (b) a headless boot exits 0 with no skipped bundle and the Loader row active, (c) `/thinking` plus

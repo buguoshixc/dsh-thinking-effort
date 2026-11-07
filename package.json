@@ -1,6 +1,6 @@
 {
   "name": "dsh-thinking-effort",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "description": "Adjustable thinking intensity (reasoning effort) for third-party API-key providers in DeepSeek Harness — declare 推理等级 for custom OpenAI-compatible routes so the composer picker works.",
   "type": "module",
   "main": "lib/index.js",
@@ -74,12 +74,12 @@
     "dsh": ">=0.2.1-rc.2 <0.3.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.5",
-    "@deepseek-ai/dsh-commands": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-settings": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
-    "@deepseek-ai/schemastery": "^3.18.5",
+    "@deepseek-ai/cordis": "^4.1.0",
+    "@deepseek-ai/dsh-commands": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-settings": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "^3.19.0",
     "react": "^18.2.0 || ^19.0.0"
   },
   "peerDependenciesMeta": {
@@ -92,12 +92,12 @@
     "react": { "optional": true }
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.5",
-    "@deepseek-ai/dsh-commands": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-settings": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
-    "@deepseek-ai/schemastery": "3.18.5",
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-commands": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-settings": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "3.19.0",
     "@types/node": "^24.13.3",
     "@types/react": "~18.3.1",
     "react": "^18.2.0",
